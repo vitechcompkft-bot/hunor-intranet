@@ -6,10 +6,20 @@ import { createClient } from '@/lib/supabase/client';
 import { STORAGE_BUCKET, BUG_NAMES, userScopeNumber } from '@/lib/types';
 import type { AppUser, BugReport } from '@/lib/types';
 
-function priorityFor(bugName: string): 'URGENT' | 'HIGH' | 'NORMAL' {
-  if (bugName === 'VPN zárolás') return 'URGENT';
-  if (bugName === 'Egyéb') return 'NORMAL';
-  return 'HIGH';
+const PRIORITIES = [
+  { key: 'kritikus', label: 'Kritikus' },
+  { key: 'magas', label: 'Magas' },
+  { key: 'kozepes', label: 'Közepes' },
+  { key: 'alacsony', label: 'Alacsony' },
+] as const;
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+function roleWord(role: string): string {
+  if (role === 'trafik') return 'trafik';
+  if (role === 'viewer') return 'bolt';
+  if (role === 'kozpont') return 'központ';
+  return 'admin';
 }
 
 export function BugReportForm({
@@ -25,6 +35,7 @@ export function BugReportForm({
   const isStaff = user.role === 'admin' || user.role === 'kozpont';
 
   const [bugName, setBugName] = useState<string>(BUG_NAMES[0]);
+  const [priority, setPriority] = useState<string>('kozepes');
   const [description, setDescription] = useState('');
   const [storeNumber, setStoreNumber] = useState(userScopeNumber(user) ?? '');
   const [file, setFile] = useState<File | null>(null);
@@ -60,15 +71,26 @@ export function BugReportForm({
       } satisfies Partial<BugReport> & { reported_by: string });
       if (insErr) throw insErr;
 
+      // Beküldő (szerep + bolt/trafik szám) és időpont összeállítása
+      const numLabel = user.role === 'trafik' ? 'Trafik' : 'Bolt';
+      const num = storeNumber.trim();
+      const bekuldo = num ? `${roleWord(user.role)} (${numLabel}: ${num})` : roleWord(user.role);
+      const d = new Date();
+      const idopont = `${d.getFullYear()}. ${pad(d.getMonth() + 1)}. ${pad(d.getDate())}. ${pad(
+        d.getHours()
+      )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
       // Telegram értesítés (best effort — hiba nem blokkol)
       fetch('/api/telegram/notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          bug_name: bugName,
-          store_number: storeNumber,
-          description: description.trim(),
-          priority: priorityFor(bugName),
+          cim: bugName,
+          prioritas: priority,
+          bekuldo,
+          idopont,
+          melleklet: file ? 'Igen' : 'Nem',
+          leiras: description.trim(),
         }),
       }).catch(() => {});
 
@@ -88,6 +110,17 @@ export function BugReportForm({
           {BUG_NAMES.map((n) => (
             <option key={n} value={n}>
               {n}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="label">Prioritás</label>
+        <select className="input" value={priority} onChange={(e) => setPriority(e.target.value)}>
+          {PRIORITIES.map((p) => (
+            <option key={p.key} value={p.key}>
+              {p.label}
             </option>
           ))}
         </select>
