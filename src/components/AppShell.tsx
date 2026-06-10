@@ -31,11 +31,25 @@ export function AppShell({
   const supabase = useMemo(() => createClient(), []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unread, setUnread] = useState<StoreMessage[]>([]);
+  const [touch, setTouch] = useState(false);
 
   const allowedSet = useMemo(() => new Set(allowed), [allowed]);
   const items = NAV_ITEMS.filter((i) => allowedSet.has(i.key));
 
-  // Olvasatlan üzenetek (csak bolti felhasználónál, akinek van store_number-e)
+  // Érintős eszköz (tablet) → felső menüsáv az oldalsáv helyett
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(pointer: coarse)');
+    const update = () => setTouch(mq.matches);
+    update();
+    if (mq.addEventListener) mq.addEventListener('change', update);
+    else if (mq.addListener) mq.addListener(update);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', update);
+      else if (mq.removeListener) mq.removeListener(update);
+    };
+  }, []);
+
   const storeScope = user.role === 'viewer' || user.role === 'kozpont' ? user.storeNumber : undefined;
 
   useEffect(() => {
@@ -84,9 +98,89 @@ export function AppShell({
     router.refresh();
   }
 
+  const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
+
+  const titleBlock = (
+    <div className="pointer-events-none absolute left-1/2 hidden -translate-x-1/2 items-baseline gap-2 md:flex">
+      <span className="font-script text-3xl leading-none text-hunor-red">Hunor</span>
+      <span className="font-script text-3xl leading-none text-hunor-green">Coop</span>
+      <span className="text-2xl font-semibold tracking-wide text-gray-700">Intranet</span>
+    </div>
+  );
+
+  const userBlock = (
+    <div className="flex items-center gap-3">
+      <div className="text-right">
+        <div className="text-sm font-medium text-gray-900">{user.username}</div>
+        <div className="flex items-center justify-end gap-2">
+          <span className={`badge ${ROLE_BADGE[user.role]}`}>{ROLE_LABELS[user.role]}</span>
+          {(user.storeNumber || user.trafikNumber) && (
+            <span className="text-xs text-gray-500">{user.storeNumber || user.trafikNumber}</span>
+          )}
+        </div>
+      </div>
+      <button onClick={logout} className="btn-secondary" title="Kijelentkezés">
+        <LogOut size={16} />
+        <span className="hidden sm:inline">Kilépés</span>
+      </button>
+    </div>
+  );
+
+  const banner = unread.length > 0 && (
+    <div className="border-b border-yellow-200 bg-yellow-50 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <Bell size={18} className="mt-0.5 shrink-0 text-yellow-600" />
+        <div className="flex-1 text-sm text-yellow-800">
+          <span className="font-semibold">{unread.length} új üzenet</span> a központtól:
+          <span className="ml-1">{unread[0].message}</span>
+          {unread.length > 1 && <span className="ml-1 text-yellow-600">…</span>}
+        </div>
+        <button onClick={markAllRead} className="badge bg-yellow-200 text-yellow-800 hover:bg-yellow-300">
+          <Check size={14} className="mr-1" /> Olvasottnak jelölöm
+        </button>
+      </div>
+    </div>
+  );
+
+  // ===== Érintős (tablet) elrendezés: felső menüsáv =====
+  if (touch) {
+    return (
+      <div className="flex min-h-screen flex-col bg-slate-50">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-gray-200 bg-white px-3 relative">
+          <Logo size={40} />
+          {titleBlock}
+          {userBlock}
+        </header>
+
+        <nav className="sticky top-16 z-10 flex gap-1 overflow-x-auto border-b border-gray-200 bg-white px-2 py-1.5">
+          {items.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(item.href);
+            return (
+              <Link
+                key={item.key}
+                href={item.href}
+                className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  active ? 'bg-brand-50 text-brand-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                }`}
+              >
+                <Icon size={16} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {banner}
+        <main className="flex-1 p-3 sm:p-5">{children}</main>
+        {allowedSet.has('chat') && <ChatbotWidget />}
+      </div>
+    );
+  }
+
+  // ===== Asztali elrendezés: oldalsáv =====
   return (
     <div className="flex min-h-screen bg-slate-50">
-      {/* Oldalsáv */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-64 transform border-r border-gray-200 bg-white transition-transform lg:static lg:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
@@ -104,7 +198,7 @@ export function AppShell({
         </div>
         <nav className="flex flex-col gap-1 p-3">
           {items.map((item) => {
-            const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+            const active = isActive(item.href);
             const Icon = item.icon;
             return (
               <Link
@@ -112,9 +206,7 @@ export function AppShell({
                 href={item.href}
                 onClick={() => setSidebarOpen(false)}
                 className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-brand-50 text-brand-700'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  active ? 'bg-brand-50 text-brand-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`}
               >
                 <Icon size={18} />
@@ -125,15 +217,10 @@ export function AppShell({
         </nav>
       </aside>
 
-      {/* Háttér overlay mobilon */}
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/30 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Fő tartalom */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4 relative">
           <button
@@ -143,52 +230,11 @@ export function AppShell({
           >
             <Menu size={22} />
           </button>
-
-          {/* Középre igazított felirat (a logó stílusában) */}
-          <div className="pointer-events-none absolute left-1/2 hidden -translate-x-1/2 items-baseline gap-2 md:flex">
-            <span className="font-script text-3xl leading-none text-hunor-red">Hunor</span>
-            <span className="font-script text-3xl leading-none text-hunor-green">Coop</span>
-            <span className="text-2xl font-semibold tracking-wide text-gray-700">Intranet</span>
-          </div>
-          <div className="flex flex-1 items-center justify-end gap-3">
-            <div className="text-right">
-              <div className="text-sm font-medium text-gray-900">{user.username}</div>
-              <div className="flex items-center justify-end gap-2">
-                <span className={`badge ${ROLE_BADGE[user.role]}`}>{ROLE_LABELS[user.role]}</span>
-                {(user.storeNumber || user.trafikNumber) && (
-                  <span className="text-xs text-gray-500">
-                    {user.storeNumber || user.trafikNumber}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button onClick={logout} className="btn-secondary" title="Kijelentkezés">
-              <LogOut size={16} />
-              <span className="hidden sm:inline">Kilépés</span>
-            </button>
-          </div>
+          {titleBlock}
+          <div className="flex flex-1 items-center justify-end">{userBlock}</div>
         </header>
 
-        {/* Olvasatlan üzenetek banner */}
-        {unread.length > 0 && (
-          <div className="border-b border-yellow-200 bg-yellow-50 px-4 py-3">
-            <div className="flex items-start gap-3">
-              <Bell size={18} className="mt-0.5 shrink-0 text-yellow-600" />
-              <div className="flex-1 text-sm text-yellow-800">
-                <span className="font-semibold">{unread.length} új üzenet</span> a központtól:
-                <span className="ml-1">{unread[0].message}</span>
-                {unread.length > 1 && <span className="ml-1 text-yellow-600">…</span>}
-              </div>
-              <button
-                onClick={markAllRead}
-                className="badge bg-yellow-200 text-yellow-800 hover:bg-yellow-300"
-              >
-                <Check size={14} className="mr-1" /> Olvasottnak jelölöm
-              </button>
-            </div>
-          </div>
-        )}
-
+        {banner}
         <main className="flex-1 p-4 sm:p-6">{children}</main>
       </div>
 
