@@ -40,7 +40,15 @@ function fileIcon(name: string) {
   return FileIcon;
 }
 
-export function FolderBrowser({ user, embedded = false }: { user: AppUser; embedded?: boolean }) {
+export function FolderBrowser({
+  user,
+  embedded = false,
+  fill = false,
+}: {
+  user: AppUser;
+  embedded?: boolean;
+  fill?: boolean;
+}) {
   const supabase = useMemo(() => createClient(), []);
   const isStaff = user.role === 'admin' || user.role === 'kozpont';
   const root = isStaff ? '' : userScopeNumber(user) ?? '';
@@ -147,7 +155,7 @@ export function FolderBrowser({ user, embedded = false }: { user: AppUser; embed
   }
 
   return (
-    <div className="space-y-4">
+    <div className={fill ? 'flex h-full min-h-0 flex-col gap-4' : 'space-y-4'}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         {!embedded && <h1 className="text-2xl font-bold text-gray-900">Fájlok</h1>}
         <div className="flex flex-wrap gap-2 ml-auto">
@@ -206,7 +214,7 @@ export function FolderBrowser({ user, embedded = false }: { user: AppUser; embed
       </div>
 
       {/* Lista */}
-      <div className="card overflow-hidden">
+      <div className={fill ? 'card min-h-0 flex-1 overflow-y-auto' : 'card overflow-hidden'}>
         {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-400">
             <Loader2 className="animate-spin" />

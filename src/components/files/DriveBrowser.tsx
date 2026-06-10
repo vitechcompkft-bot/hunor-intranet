@@ -42,7 +42,13 @@ function fileIcon(mime: string, name: string) {
   return FileIcon;
 }
 
-export function DriveBrowser({ canManage = false }: { canManage?: boolean }) {
+export function DriveBrowser({
+  canManage = false,
+  fill = false,
+}: {
+  canManage?: boolean;
+  fill?: boolean;
+}) {
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
   const [items, setItems] = useState<DriveItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,7 +175,7 @@ export function DriveBrowser({ canManage = false }: { canManage?: boolean }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className={fill ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
       {/* Eszköztár (staff): mappa + feltöltés */}
       {canManage && (
         <div className="flex flex-wrap items-center gap-2">
@@ -233,7 +239,7 @@ export function DriveBrowser({ canManage = false }: { canManage?: boolean }) {
         </div>
       )}
 
-      <div className="card overflow-hidden">
+      <div className={fill ? 'card min-h-0 flex-1 overflow-y-auto' : 'card overflow-hidden'}>
         {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-400">
             <Loader2 className="animate-spin" />
