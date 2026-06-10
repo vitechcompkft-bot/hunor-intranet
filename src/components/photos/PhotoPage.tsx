@@ -1,178 +1,244 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { UploadCloud, Trash2, Download, Loader2 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
-import { STORAGE_BUCKET, userScopeNumber } from '@/lib/types';
-import type { AppUser, PhotoRow } from '@/lib/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  UploadCloud,
+  Loader2,
+  Folder,
+  ArrowLeft,
+  Download,
+  CloudOff,
+  ImageIcon,
+} from 'lucide-react';
+import type { AppUser } from '@/lib/types';
 
-interface PhotoWithUrl extends PhotoRow {
-  url?: string;
+interface DrivePhoto {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+}
+interface DriveFolder {
+  id: string;
+  name: string;
 }
 
-const MAX_SIZE = 10 * 1024 * 1024;
+const MAX_SIZE = 15 * 1024 * 1024;
 
 export function PhotoPage({ user }: { user: AppUser }) {
-  const supabase = useMemo(() => createClient(), []);
   const isStaff = user.role === 'admin' || user.role === 'kozpont';
-  const scope = userScopeNumber(user);
+  return isStaff ? <AdminPhotos /> : <StorePhotos />;
+}
 
-  const [photos, setPhotos] = useState<PhotoWithUrl[]>([]);
+/** Közös galéria rács */
+function Gallery({ photos }: { photos: DrivePhoto[] }) {
+  if (photos.length === 0) {
+    return <div className="card p-12 text-center text-gray-400">Nincs feltöltött fotó.</div>;
+  }
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+      {photos.map((p) => {
+        const src = `/api/drive/file?id=${p.id}`;
+        return (
+          <div key={p.id} className="card overflow-hidden">
+            <a href={src} target="_blank" rel="noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={src} alt={p.name} className="h-40 w-full bg-gray-100 object-cover" loading="lazy" />
+            </a>
+            <div className="flex items-center justify-between gap-2 p-2">
+              <span className="truncate text-xs text-gray-600" title={p.name}>
+                {p.name}
+              </span>
+              <a
+                href={src}
+                download={p.name}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              >
+                <Download size={14} />
+              </a>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NotConfigured() {
+  return (
+    <div className="card flex flex-col items-center gap-3 p-10 text-center text-gray-500">
+      <CloudOff size={32} className="text-gray-300" />
+      <p className="font-medium text-gray-700">A Google Drive még nincs csatlakoztatva.</p>
+      <p className="text-sm">Az admin a Beállítások → Google Drive fülön tudja csatlakoztatni.</p>
+    </div>
+  );
+}
+
+/** Admin: boltszám-mappák → galéria */
+function AdminPhotos() {
+  const [folders, setFolders] = useState<DriveFolder[]>([]);
+  const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [filterStore, setFilterStore] = useState('');
+  const [selected, setSelected] = useState<DriveFolder | null>(null);
+  const [photos, setPhotos] = useState<DrivePhoto[]>([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
 
+  useEffect(() => {
+    (async () => {
+      const res = await fetch('/api/drive/photo-folders');
+      const data = await res.json();
+      setConfigured(data.configured !== false);
+      setFolders(data.folders ?? []);
+      setLoading(false);
+    })();
+  }, []);
+
+  async function openFolder(f: DriveFolder) {
+    setSelected(f);
+    setLoadingPhotos(true);
+    const res = await fetch(`/api/drive/photos?folderId=${f.id}`);
+    const data = await res.json();
+    setPhotos(data.photos ?? []);
+    setLoadingPhotos(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="card flex items-center justify-center py-16 text-gray-400">
+        <Loader2 className="animate-spin" />
+      </div>
+    );
+  }
+  if (!configured) return <div className="space-y-4"><h1 className="text-2xl font-bold text-gray-900">Fotók</h1><NotConfigured /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        {selected && (
+          <button onClick={() => setSelected(null)} className="btn-secondary">
+            <ArrowLeft size={16} />
+          </button>
+        )}
+        <h1 className="text-2xl font-bold text-gray-900">
+          Fotók{selected ? ` — ${selected.name}` : ''}
+        </h1>
+      </div>
+
+      {!selected ? (
+        folders.length === 0 ? (
+          <div className="card p-12 text-center text-gray-400">
+            Nincs boltszám-mappa a Drive gyökerében.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {folders.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => openFolder(f)}
+                className="card flex flex-col items-center gap-2 p-5 transition hover:shadow-md"
+              >
+                <Folder size={32} className="text-brand-500" />
+                <span className="text-sm font-medium text-gray-800">{f.name}</span>
+              </button>
+            ))}
+          </div>
+        )
+      ) : loadingPhotos ? (
+        <div className="card flex items-center justify-center py-16 text-gray-400">
+          <Loader2 className="animate-spin" />
+        </div>
+      ) : (
+        <Gallery photos={photos} />
+      )}
+    </div>
+  );
+}
+
+/** Bolt/trafik: feltöltés a saját mappába + saját galéria */
+function StorePhotos() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [caption, setCaption] = useState('');
+  const [photos, setPhotos] = useState<DrivePhoto[]>([]);
+  const [configured, setConfigured] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('photos')
-      .select('*')
-      .order('created_at', { ascending: false });
-    const rows = (data as PhotoRow[]) ?? [];
-    const paths = rows.map((r) => r.photo_url);
-    const urlMap = new Map<string, string>();
-    if (paths.length) {
-      const { data: signed } = await supabase.storage
-        .from(STORAGE_BUCKET)
-        .createSignedUrls(paths, 600);
-      (signed ?? []).forEach((s) => {
-        if (s.signedUrl && s.path) urlMap.set(s.path, s.signedUrl);
-      });
-    }
-    setPhotos(rows.map((r) => ({ ...r, url: urlMap.get(r.photo_url) })));
+    const res = await fetch('/api/drive/photos');
+    const data = await res.json();
+    setConfigured(data.configured !== false);
+    setPhotos(data.photos ?? []);
     setLoading(false);
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function handleUpload(file: File) {
-    if (file.size > MAX_SIZE) {
-      setError('A kép legfeljebb 10 MB lehet.');
-      return;
+  async function handleFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    for (const f of files) {
+      if (f.size > MAX_SIZE) {
+        setError(`A(z) "${f.name}" túl nagy (max 15 MB).`);
+        return;
+      }
     }
     setBusy(true);
     setError(null);
     try {
-      const safe = file.name.replace(/[^\w.\-]/g, '_');
-      const path = `photos/${scope ?? 'kozpont'}/${Date.now()}_${safe}`;
-      const { error: upErr } = await supabase.storage
-        .from(STORAGE_BUCKET)
-        .upload(path, file, { contentType: file.type || undefined });
-      if (upErr) throw upErr;
-      const { error: insErr } = await supabase.from('photos').insert({
-        store_number: user.role === 'trafik' ? null : scope ?? null,
-        trafik_number: user.role === 'trafik' ? scope ?? null : null,
-        photo_url: path,
-        caption: caption || null,
-        uploaded_by: user.id,
-      });
-      if (insErr) throw insErr;
-      setCaption('');
+      const fd = new FormData();
+      files.forEach((f) => fd.append('file', f));
+      const res = await fetch('/api/drive/photo-upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Feltöltési hiba');
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Feltöltési hiba');
     } finally {
       setBusy(false);
+      if (inputRef.current) inputRef.current.value = '';
     }
   }
 
-  async function remove(p: PhotoWithUrl) {
-    if (!confirm('Biztosan törlöd ezt a fotót?')) return;
-    await supabase.storage.from(STORAGE_BUCKET).remove([p.photo_url]);
-    await supabase.from('photos').delete().eq('id', p.id);
-    load();
-  }
-
-  const shown = photos.filter((p) => {
-    if (!filterStore) return true;
-    const s = (p.store_number || p.trafik_number || '').toLowerCase();
-    return s.includes(filterStore.toLowerCase());
-  });
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <h1 className="text-2xl font-bold text-gray-900">Fotók</h1>
 
-      {!isStaff && (
-        <div className="card space-y-3 p-6">
-          <input
-            className="input"
-            placeholder="Felirat (opcionális)"
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-          />
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="hidden"
-            onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
-          />
-          <button onClick={() => inputRef.current?.click()} className="btn-primary" disabled={busy}>
-            {busy ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />} Kép feltöltése
-          </button>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-        </div>
-      )}
-
-      {isStaff && (
-        <div className="card flex items-end gap-3 p-4">
-          <div>
-            <label className="label">Szűrés bolt/trafik szerint</label>
-            <input
-              className="input w-48"
-              value={filterStore}
-              onChange={(e) => setFilterStore(e.target.value)}
-              placeholder="pl. B001"
-            />
-          </div>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="card flex items-center justify-center py-16 text-gray-400">
-          <Loader2 className="animate-spin" />
-        </div>
-      ) : shown.length === 0 ? (
-        <div className="card p-12 text-center text-gray-400">Nincs megjeleníthető fotó.</div>
+      {!configured ? (
+        <NotConfigured />
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-          {shown.map((p) => (
-            <div key={p.id} className="card overflow-hidden">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={p.url}
-                alt={p.caption ?? 'fotó'}
-                className="h-40 w-full bg-gray-100 object-cover"
-              />
-              <div className="p-3">
-                {p.caption && <p className="truncate text-sm text-gray-700">{p.caption}</p>}
-                <div className="mt-1 flex items-center justify-between text-xs text-gray-400">
-                  <span>{p.store_number || p.trafik_number || '—'}</span>
-                  <span>{new Date(p.created_at).toLocaleDateString('hu-HU')}</span>
-                </div>
-                {isStaff && (
-                  <div className="mt-2 flex gap-2">
-                    {p.url && (
-                      <a href={p.url} download target="_blank" rel="noreferrer" className="btn-secondary flex-1 py-1">
-                        <Download size={14} />
-                      </a>
-                    )}
-                    <button onClick={() => remove(p)} className="btn-danger flex-1 py-1">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                )}
-              </div>
+        <>
+          <div className="card flex flex-col items-center gap-3 p-6 text-center">
+            <div className="rounded-full bg-brand-50 p-3 text-brand-600">
+              <ImageIcon size={28} />
             </div>
-          ))}
-        </div>
+            <p className="text-sm text-gray-600">Töltsd fel a képeket a saját mappádba.</p>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => handleFiles(e.target.files)}
+            />
+            <button onClick={() => inputRef.current?.click()} className="btn-primary" disabled={busy}>
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
+              {busy ? 'Feltöltés…' : 'Kép feltöltése'}
+            </button>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+          </div>
+
+          {loading ? (
+            <div className="card flex items-center justify-center py-16 text-gray-400">
+              <Loader2 className="animate-spin" />
+            </div>
+          ) : (
+            <Gallery photos={photos} />
+          )}
+        </>
       )}
     </div>
   );

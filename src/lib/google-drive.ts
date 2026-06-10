@@ -11,7 +11,8 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
-const SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+// Teljes Drive hozzáférés: olvasás (megosztott mappa) + írás (fotó feltöltés).
+const SCOPE = 'https://www.googleapis.com/auth/drive';
 
 /** Be van-e állítva az OAuth kliens (env)? */
 export function isDriveConfigured(): boolean {
@@ -201,4 +202,71 @@ export async function fetchDriveFile(
   let filename = meta.name as string;
   if (exportMime === 'application/pdf' && !filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
   return { body: await res.arrayBuffer(), contentType, filename };
+}
+
+// === Fotó funkció: boltszám-mappák a Drive gyökerében ========================
+
+/** A Drive gyökerében (My Drive) lévő mappák listája (boltszám-mappák). */
+export async function listRootFolders(): Promise<{ id: string; name: string }[]> {
+  const q = encodeURIComponent(`'root' in parents and mimeType='${FOLDER_MIME}' and trashed=false`);
+  const res = await driveFetch(
+    `/files?q=${q}&fields=files(id,name)&orderBy=name&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true`
+  );
+  if (!res.ok) throw new Error('Drive gyökér listázási hiba: ' + (await res.text()));
+  const data = await res.json();
+  return (data.files ?? []).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name }));
+}
+
+/** Egy boltszám-mappa azonosítója a gyökérben (ha nincs, létrehozza). */
+export async function findOrCreateStoreFolder(storeNumber: string): Promise<string> {
+  const safe = storeNumber.replace(/['\\]/g, '');
+  const q = encodeURIComponent(
+    `name='${safe}' and 'root' in parents and mimeType='${FOLDER_MIME}' and trashed=false`
+  );
+  const res = await driveFetch(`/files?q=${q}&fields=files(id,name)&pageSize=1`);
+  if (res.ok) {
+    const data = await res.json();
+    if (data.files?.[0]?.id) return data.files[0].id;
+  }
+  const token = await getAccessToken();
+  const createRes = await fetch(`${DRIVE_API}/files?supportsAllDrives=true&fields=id`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: safe, mimeType: FOLDER_MIME, parents: ['root'] }),
+  });
+  if (!createRes.ok) throw new Error('Mappa létrehozási hiba: ' + (await createRes.text()));
+  return (await createRes.json()).id;
+}
+
+/** Fájl feltöltése egy mappába (multipart). */
+export async function uploadFileToDrive(
+  folderId: string,
+  filename: string,
+  mimeType: string,
+  bytes: Buffer
+): Promise<{ id: string; name: string }> {
+  const token = await getAccessToken();
+  const boundary = `hunor_boundary_${bytes.byteLength}_x`;
+  const metadata = { name: filename, parents: [folderId] };
+  const pre = Buffer.from(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(
+      metadata
+    )}\r\n--${boundary}\r\nContent-Type: ${mimeType || 'application/octet-stream'}\r\n\r\n`
+  );
+  const post = Buffer.from(`\r\n--${boundary}--`);
+  const body = Buffer.concat([pre, bytes, post]);
+
+  const res = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    }
+  );
+  if (!res.ok) throw new Error('Feltöltési hiba: ' + (await res.text()));
+  return await res.json();
 }
