@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { isDriveConnected, listDriveFolder, findOrCreateStoreFolder } from '@/lib/google-drive';
+import {
+  isDriveConnected,
+  listFolderContents,
+  findOrCreateStoreFolder,
+  getFolderParents,
+} from '@/lib/google-drive';
 
 export const runtime = 'nodejs';
 
 /**
- * Fotók listája egy mappából.
- * - admin/központ: a query ?folderId= mappa képei
- * - bolt/trafik: a SAJÁT boltszám-mappája (a session alapján), a kliens nem adhatja meg
+ * Egy mappa tartalma (almappák + képek).
+ * - admin/központ: a query ?folderId= mappa tartalma
+ * - bolt/trafik: a SAJÁT boltszám-mappája, vagy annak egy almappája (dátum-mappa).
+ *   A kliens nem érhet el más bolt mappáját (szülő-ellenőrzés).
  */
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -16,33 +22,46 @@ export async function GET(request: Request) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Nincs jogosultság' }, { status: 401 });
 
-  const app = (user.app_metadata ?? {}) as { role?: string; store_number?: string; trafik_number?: string };
+  const app = (user.app_metadata ?? {}) as {
+    role?: string;
+    store_number?: string;
+    trafik_number?: string;
+  };
   const role = app.role ?? 'viewer';
   const isStaff = role === 'admin' || role === 'kozpont';
 
   if (!(await isDriveConnected())) {
-    return NextResponse.json({ configured: false, photos: [] });
+    return NextResponse.json({ configured: false, folders: [], photos: [] });
   }
 
   try {
-    let folderId: string | null = null;
+    const requested = new URL(request.url).searchParams.get('folderId');
+    let folderId: string;
+
     if (isStaff) {
-      folderId = new URL(request.url).searchParams.get('folderId');
-      if (!folderId) return NextResponse.json({ error: 'Hiányzó folderId' }, { status: 400 });
+      if (!requested) return NextResponse.json({ error: 'Hiányzó folderId' }, { status: 400 });
+      folderId = requested;
     } else {
       const scope = role === 'trafik' ? app.trafik_number : app.store_number;
-      if (!scope) return NextResponse.json({ configured: true, photos: [] });
-      folderId = await findOrCreateStoreFolder(scope);
+      if (!scope) return NextResponse.json({ configured: true, folders: [], photos: [] });
+      const storeFolderId = await findOrCreateStoreFolder(scope);
+      if (!requested || requested === storeFolderId) {
+        folderId = storeFolderId;
+      } else {
+        // csak a saját bolt-mappa közvetlen almappája engedélyezett
+        const parents = await getFolderParents(requested);
+        if (!parents.includes(storeFolderId)) {
+          return NextResponse.json({ error: 'Nincs jogosultság' }, { status: 403 });
+        }
+        folderId = requested;
+      }
     }
 
-    const items = await listDriveFolder(folderId);
-    const photos = items
-      .filter((i) => !i.isFolder && i.mimeType.startsWith('image/'))
-      .map((i) => ({ id: i.id, name: i.name, modifiedTime: i.modifiedTime }));
-    return NextResponse.json({ configured: true, folderId, photos });
+    const { folders, photos } = await listFolderContents(folderId);
+    return NextResponse.json({ configured: true, folderId, folders, photos });
   } catch (e) {
     return NextResponse.json(
-      { configured: true, error: e instanceof Error ? e.message : 'Drive hiba', photos: [] },
+      { configured: true, error: e instanceof Error ? e.message : 'Drive hiba', folders: [], photos: [] },
       { status: 500 }
     );
   }

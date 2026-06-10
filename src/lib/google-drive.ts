@@ -217,13 +217,15 @@ export async function listRootFolders(): Promise<{ id: string; name: string }[]>
   return (data.files ?? []).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name }));
 }
 
-/** Egy boltszám-mappa azonosítója a gyökérben (ha nincs, létrehozza). */
-export async function findOrCreateStoreFolder(storeNumber: string): Promise<string> {
-  const safe = storeNumber.replace(/['\\]/g, '');
+/** Egy almappa azonosítója a megadott szülő alatt (ha nincs, létrehozza). */
+export async function findOrCreateFolder(parentId: string, name: string): Promise<string> {
+  const safe = name.replace(/['\\]/g, '');
   const q = encodeURIComponent(
-    `name='${safe}' and 'root' in parents and mimeType='${FOLDER_MIME}' and trashed=false`
+    `name='${safe}' and '${parentId}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`
   );
-  const res = await driveFetch(`/files?q=${q}&fields=files(id,name)&pageSize=1`);
+  const res = await driveFetch(
+    `/files?q=${q}&fields=files(id,name)&pageSize=1&supportsAllDrives=true&includeItemsFromAllDrives=true`
+  );
   if (res.ok) {
     const data = await res.json();
     if (data.files?.[0]?.id) return data.files[0].id;
@@ -232,10 +234,38 @@ export async function findOrCreateStoreFolder(storeNumber: string): Promise<stri
   const createRes = await fetch(`${DRIVE_API}/files?supportsAllDrives=true&fields=id`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: safe, mimeType: FOLDER_MIME, parents: ['root'] }),
+    body: JSON.stringify({ name: safe, mimeType: FOLDER_MIME, parents: [parentId] }),
   });
   if (!createRes.ok) throw new Error('Mappa létrehozási hiba: ' + (await createRes.text()));
   return (await createRes.json()).id;
+}
+
+/** Egy boltszám-mappa azonosítója a gyökérben (ha nincs, létrehozza). */
+export async function findOrCreateStoreFolder(storeNumber: string): Promise<string> {
+  return findOrCreateFolder('root', storeNumber);
+}
+
+/** Egy mappa tartalma szétválasztva: almappák + képek. */
+export async function listFolderContents(folderId: string): Promise<{
+  folders: { id: string; name: string }[];
+  photos: { id: string; name: string; modifiedTime?: string }[];
+}> {
+  const items = await listDriveFolder(folderId);
+  const folders = items
+    .filter((i) => i.isFolder)
+    .map((i) => ({ id: i.id, name: i.name }))
+    .sort((a, b) => b.name.localeCompare(a.name)); // dátum-mappák: legújabb elöl
+  const photos = items
+    .filter((i) => !i.isFolder && i.mimeType.startsWith('image/'))
+    .map((i) => ({ id: i.id, name: i.name, modifiedTime: i.modifiedTime }));
+  return { folders, photos };
+}
+
+/** Egy mappa szülő-azonosítói (hozzáférés-ellenőrzéshez). */
+export async function getFolderParents(folderId: string): Promise<string[]> {
+  const res = await driveFetch(`/files/${folderId}?fields=parents&supportsAllDrives=true`);
+  if (!res.ok) return [];
+  return ((await res.json()).parents as string[]) ?? [];
 }
 
 /** Fájl feltöltése egy mappába (multipart). */

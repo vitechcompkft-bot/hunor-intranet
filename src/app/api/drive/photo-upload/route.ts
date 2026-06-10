@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { isDriveConnected, findOrCreateStoreFolder, uploadFileToDrive } from '@/lib/google-drive';
+import {
+  isDriveConnected,
+  findOrCreateStoreFolder,
+  findOrCreateFolder,
+  uploadFileToDrive,
+} from '@/lib/google-drive';
+
+/** Mai dátum YYYY-MM-DD formában, magyar (Budapest) időzóna szerint. */
+function budapestDate(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Budapest' });
+}
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -40,16 +50,22 @@ export async function POST(request: Request) {
     const files = form.getAll('file').filter((f): f is File => f instanceof File);
     if (files.length === 0) return NextResponse.json({ error: 'Nincs fájl.' }, { status: 400 });
 
-    const folderId = await findOrCreateStoreFolder(targetStore);
+    // Napi dátum-mappa a boltszám-mappán belül (a kliens adja a helyi dátumot)
+    const rawDate = (form.get('dateFolder') as string | null) ?? '';
+    const dateFolderName = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : budapestDate();
+
+    const storeFolderId = await findOrCreateStoreFolder(targetStore);
+    const dateFolderId = await findOrCreateFolder(storeFolderId, dateFolderName);
+
     const uploaded: { id: string; name: string }[] = [];
     for (const file of files) {
       const bytes = Buffer.from(await file.arrayBuffer());
       const safeName = file.name.replace(/[\\/]/g, '_');
-      const result = await uploadFileToDrive(folderId, safeName, file.type, bytes);
+      const result = await uploadFileToDrive(dateFolderId, safeName, file.type, bytes);
       uploaded.push(result);
     }
 
-    return NextResponse.json({ ok: true, uploaded });
+    return NextResponse.json({ ok: true, folderId: dateFolderId, dateFolder: dateFolderName, uploaded });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Feltöltési hiba' }, { status: 500 });
   }
