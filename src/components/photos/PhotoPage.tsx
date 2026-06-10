@@ -1,17 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   UploadCloud,
   Loader2,
   Folder,
   ArrowLeft,
   Download,
+  Trash2,
   CloudOff,
   ImageIcon,
   ChevronRight,
   Home,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
 import type { AppUser } from '@/lib/types';
 
 interface DrivePhoto {
@@ -23,6 +27,7 @@ interface FolderRef {
   id: string;
   name: string;
 }
+type FolderFilter = 'all' | 'store' | 'trafik';
 
 const MAX_SIZE = 25 * 1024 * 1024;
 
@@ -43,11 +48,7 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-async function compressImage(
-  file: File,
-  maxDim = 1600,
-  quality = 0.82
-): Promise<Blob> {
+async function compressImage(file: File, maxDim = 1600, quality = 0.82): Promise<Blob> {
   try {
     if (!file.type.startsWith('image/')) return file;
     const img = await loadImage(file);
@@ -82,54 +83,198 @@ function nowParts() {
   };
 }
 
+/** Több fájl letöltése egyenként (nem ZIP-ben), kis késleltetéssel. */
+async function downloadSequential(photos: DrivePhoto[]) {
+  for (const p of photos) {
+    const a = document.createElement('a');
+    a.href = `/api/drive/file?id=${p.id}`;
+    a.download = p.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 // ---- Megosztott UI ----------------------------------------------------------
+function PhotoThumb({ p, children }: { p: DrivePhoto; children?: React.ReactNode }) {
+  const src = `/api/drive/file?id=${p.id}`;
+  return (
+    <div className="card relative overflow-hidden">
+      {children}
+      <a href={src} target="_blank" rel="noreferrer">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={p.name} className="h-40 w-full bg-gray-100 object-cover" loading="lazy" />
+      </a>
+      <div className="flex items-center justify-between gap-2 p-2">
+        <span className="truncate text-xs text-gray-600" title={p.name}>
+          {p.name}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Bolti (egyszerű) galéria — csak megtekintés + letöltés */
 function Gallery({ photos }: { photos: DrivePhoto[] }) {
   if (photos.length === 0) {
     return <div className="card p-10 text-center text-gray-400">Nincs fotó ebben a mappában.</div>;
   }
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-      {photos.map((p) => {
-        const src = `/api/drive/file?id=${p.id}`;
-        return (
-          <div key={p.id} className="card overflow-hidden">
-            <a href={src} target="_blank" rel="noreferrer">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={src} alt={p.name} className="h-40 w-full bg-gray-100 object-cover" loading="lazy" />
-            </a>
-            <div className="flex items-center justify-between gap-2 p-2">
-              <span className="truncate text-xs text-gray-600" title={p.name}>
-                {p.name}
-              </span>
-              <a
-                href={src}
-                download={p.name}
-                target="_blank"
-                rel="noreferrer"
-                className="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-              >
-                <Download size={14} />
-              </a>
-            </div>
-          </div>
-        );
-      })}
+      {photos.map((p) => (
+        <PhotoThumb key={p.id} p={p}>
+          <a
+            href={`/api/drive/file?id=${p.id}`}
+            download={p.name}
+            target="_blank"
+            rel="noreferrer"
+            className="absolute right-1 top-1 z-10 rounded-md bg-white/90 p-1.5 text-gray-500 shadow hover:text-gray-800"
+            title="Letöltés"
+          >
+            <Download size={15} />
+          </a>
+        </PhotoThumb>
+      ))}
     </div>
   );
 }
 
-function FolderGrid({ folders, onOpen }: { folders: FolderRef[]; onOpen: (f: FolderRef) => void }) {
+/** Admin galéria — kijelölés, csoportos letöltés, törlés */
+function AdminGallery({ photos, onChanged }: { photos: DrivePhoto[]; onChanged: () => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  const allSelected = photos.length > 0 && selected.size === photos.length;
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(photos.map((p) => p.id)));
+  }
+
+  const target = selected.size > 0 ? photos.filter((p) => selected.has(p.id)) : photos;
+
+  async function download() {
+    setBusy(true);
+    await downloadSequential(target);
+    setBusy(false);
+  }
+
+  async function remove() {
+    const ids = [...selected];
+    if (ids.length === 0) {
+      alert('Jelölj ki fotó(ka)t a törléshez.');
+      return;
+    }
+    if (!confirm(`Biztosan véglegesen törlöd a kijelölt ${ids.length} fotót?`)) return;
+    setBusy(true);
+    await fetch('/api/drive/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    setBusy(false);
+    setSelected(new Set());
+    onChanged();
+  }
+
+  if (photos.length === 0) {
+    return <div className="card p-10 text-center text-gray-400">Nincs fotó ebben a mappában.</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={toggleAll} className="btn-secondary">
+          {allSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+          {allSelected ? 'Kijelölés törlése' : 'Mind kijelöl'}
+        </button>
+        <button onClick={download} className="btn-secondary" disabled={busy}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          Letöltés ({selected.size > 0 ? selected.size : 'összes'})
+        </button>
+        <button onClick={remove} className="btn-danger" disabled={busy || selected.size === 0}>
+          <Trash2 size={16} /> Törlés ({selected.size})
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {photos.map((p) => {
+          const isSel = selected.has(p.id);
+          return (
+            <div
+              key={p.id}
+              className={`card relative overflow-hidden ${isSel ? 'ring-2 ring-brand-500' : ''}`}
+            >
+              <button
+                onClick={() => toggle(p.id)}
+                className="absolute left-1 top-1 z-10 rounded-md bg-white/90 p-1 text-brand-600 shadow"
+                title="Kijelölés"
+              >
+                {isSel ? <CheckSquare size={16} /> : <Square size={16} />}
+              </button>
+              <a
+                href={`/api/drive/file?id=${p.id}`}
+                download={p.name}
+                target="_blank"
+                rel="noreferrer"
+                className="absolute right-1 top-1 z-10 rounded-md bg-white/90 p-1.5 text-gray-500 shadow hover:text-gray-800"
+                title="Letöltés"
+              >
+                <Download size={14} />
+              </a>
+              <a href={`/api/drive/file?id=${p.id}`} target="_blank" rel="noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/drive/file?id=${p.id}`}
+                  alt={p.name}
+                  className="h-40 w-full bg-gray-100 object-cover"
+                  loading="lazy"
+                />
+              </a>
+              <div className="truncate p-2 text-xs text-gray-600" title={p.name}>
+                {p.name}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FolderGrid({
+  folders,
+  onOpen,
+  onDelete,
+}: {
+  folders: FolderRef[];
+  onOpen: (f: FolderRef) => void;
+  onDelete?: (f: FolderRef) => void;
+}) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       {folders.map((f) => (
-        <button
-          key={f.id}
-          onClick={() => onOpen(f)}
-          className="card flex flex-col items-center gap-2 p-5 transition hover:shadow-md"
-        >
-          <Folder size={32} className="text-brand-500" />
-          <span className="text-sm font-medium text-gray-800">{f.name}</span>
-        </button>
+        <div key={f.id} className="card relative flex flex-col items-center gap-2 p-5">
+          {onDelete && (
+            <button
+              onClick={() => onDelete(f)}
+              className="absolute right-1 top-1 rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-600"
+              title="Mappa törlése"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+          <button onClick={() => onOpen(f)} className="flex flex-col items-center gap-2">
+            <Folder size={32} className="text-brand-500" />
+            <span className="text-sm font-medium text-gray-800">{f.name}</span>
+          </button>
+        </div>
       ))}
     </div>
   );
@@ -177,9 +322,12 @@ export function PhotoPage({ user }: { user: AppUser }) {
   return isStaff ? <AdminPhotos /> : <StorePhotos />;
 }
 
-// ---- Admin: bolt-mappák -> dátum-mappák -> képek -----------------------------
+// ---- Admin: bolt-mappák (szűrhető) -> dátum-mappák -> képek ------------------
 function AdminPhotos() {
+  const supabase = useMemo(() => createClient(), []);
   const [storeFolders, setStoreFolders] = useState<FolderRef[]>([]);
+  const [typeMap, setTypeMap] = useState<Record<string, 'store' | 'trafik'>>({});
+  const [filter, setFilter] = useState<FolderFilter>('all');
   const [path, setPath] = useState<FolderRef[]>([]);
   const [folders, setFolders] = useState<FolderRef[]>([]);
   const [photos, setPhotos] = useState<DrivePhoto[]>([]);
@@ -188,22 +336,29 @@ function AdminPhotos() {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch('/api/drive/photo-folders');
-      const d = await res.json();
-      setConfigured(d.configured !== false);
-      setStoreFolders(d.folders ?? []);
+      const [foldersRes, storeLists] = await Promise.all([
+        fetch('/api/drive/photo-folders').then((r) => r.json()),
+        supabase.from('store_lists').select('number,type'),
+      ]);
+      setConfigured(foldersRes.configured !== false);
+      setStoreFolders(foldersRes.folders ?? []);
+      const map: Record<string, 'store' | 'trafik'> = {};
+      (storeLists.data ?? []).forEach((s: { number: string; type: 'store' | 'trafik' }) => {
+        map[s.number] = s.type;
+      });
+      setTypeMap(map);
       setLoading(false);
     })();
-  }, []);
+  }, [supabase]);
 
-  async function loadContents(id: string) {
+  const loadContents = useCallback(async (id: string) => {
     setLoading(true);
     const res = await fetch(`/api/drive/photos?folderId=${id}`);
     const d = await res.json();
     setFolders(d.folders ?? []);
     setPhotos(d.photos ?? []);
     setLoading(false);
-  }
+  }, []);
 
   function openFolder(f: FolderRef) {
     setPath((p) => [...p, f]);
@@ -219,6 +374,19 @@ function AdminPhotos() {
     loadContents(np[np.length - 1].id);
   }
 
+  async function deleteFolder(f: FolderRef) {
+    if (!confirm(`Biztosan véglegesen törlöd a(z) "${f.name}" mappát az összes benne lévő fotóval?`)) return;
+    await fetch('/api/drive/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [f.id] }),
+    });
+    // frissítés a jelenlegi szinten
+    if (path.length > 0) loadContents(path[path.length - 1].id);
+  }
+
+  const filteredStores = storeFolders.filter((f) => filter === 'all' || typeMap[f.name] === filter);
+
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold text-gray-900">Fotók</h1>
@@ -226,21 +394,48 @@ function AdminPhotos() {
         <NotConfigured />
       ) : (
         <>
-          <Breadcrumb path={path} onGo={goTo} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Breadcrumb path={path} onGo={goTo} />
+            {path.length === 0 && (
+              <div className="flex gap-1">
+                {([
+                  ['all', 'Mind'],
+                  ['store', 'Bolt'],
+                  ['trafik', 'Trafik'],
+                ] as const).map(([t, label]) => (
+                  <button
+                    key={t}
+                    onClick={() => setFilter(t)}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
+                      filter === t ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {loading ? (
             <Spinner />
           ) : path.length === 0 ? (
-            storeFolders.length === 0 ? (
+            filteredStores.length === 0 ? (
               <div className="card p-12 text-center text-gray-400">
-                Nincs boltszám-mappa a Drive gyökerében.
+                Nincs megjeleníthető mappa.
               </div>
             ) : (
-              <FolderGrid folders={storeFolders} onOpen={openFolder} />
+              <FolderGrid folders={filteredStores} onOpen={openFolder} />
             )
           ) : (
             <div className="space-y-4">
-              {folders.length > 0 && <FolderGrid folders={folders} onOpen={openFolder} />}
-              <Gallery photos={photos} />
+              {folders.length > 0 && (
+                <FolderGrid folders={folders} onOpen={openFolder} onDelete={deleteFolder} />
+              )}
+              <AdminGallery
+                photos={photos}
+                onChanged={() => loadContents(path[path.length - 1].id)}
+              />
             </div>
           )}
         </>
@@ -316,7 +511,6 @@ function StorePhotos() {
         /* nem JSON */
       }
       if (!res.ok) throw new Error(data.error || `Feltöltési hiba (${res.status})`);
-      // navigáljunk a mai dátum-mappába, hogy lássuk az új képet
       if (data.folderId && data.dateFolder) {
         setPath([{ id: data.folderId, name: data.dateFolder }]);
         loadContents(data.folderId);

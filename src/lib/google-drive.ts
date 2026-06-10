@@ -268,6 +268,18 @@ export async function getFolderParents(folderId: string): Promise<string[]> {
   return ((await res.json()).parents as string[]) ?? [];
 }
 
+/** Egy fájl vagy mappa törlése (kukába helyezés helyett végleges törlés). */
+export async function deleteDriveItem(id: string): Promise<void> {
+  const token = await getAccessToken();
+  const res = await fetch(`${DRIVE_API}/files/${id}?supportsAllDrives=true`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error('Törlési hiba: ' + (await res.text()));
+  }
+}
+
 /** Fájl feltöltése egy mappába (multipart). */
 export async function uploadFileToDrive(
   folderId: string,
