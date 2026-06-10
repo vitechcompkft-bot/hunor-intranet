@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { LandscapeFrame } from "@/components/LandscapeFrame";
 
 export const metadata: Metadata = {
   title: "Hunor Coop Intranet",
@@ -22,7 +23,7 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
-        {children}
+        <LandscapeFrame>{children}</LandscapeFrame>
       </body>
     </html>
   );
