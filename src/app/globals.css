@@ -44,11 +44,14 @@ body {
    Álló (elforgatott) nézetben a látható magasság = 100vw (a keret magassága). */
 .app-touch-root {
   height: 100vh;
+  height: 100dvh; /* látható magasság (telefon URL-sáv kezelése); ha nem támogatott, 100vh marad */
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-@media (pointer: coarse) and (orientation: portrait) {
+/* Csak tabletnél (portré szélesség >= 600px), ahol a tartalom el van forgatva:
+   a látható magasság = 100vw (a forgatott keret magassága). Telefonon NEM. */
+@media (pointer: coarse) and (orientation: portrait) and (min-width: 600px) {
   .app-touch-root {
     height: 100vw;
   }

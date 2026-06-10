@@ -17,18 +17,25 @@ export function LandscapeFrame({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     const portrait = window.matchMedia('(orientation: portrait)');
     const touch = window.matchMedia('(pointer: coarse)');
+    // Csak tablet méretnél forgatunk (portré szélesség >= 600px). Telefon NEM forog.
+    const tablet = window.matchMedia('(min-width: 600px)');
 
-    const update = () => setRotate(portrait.matches && touch.matches);
+    const update = () => setRotate(portrait.matches && touch.matches && tablet.matches);
     update();
 
-    if (portrait.addEventListener) portrait.addEventListener('change', update);
-    else if (portrait.addListener) portrait.addListener(update);
+    const mqs = [portrait, touch, tablet];
+    mqs.forEach((mq) => {
+      if (mq.addEventListener) mq.addEventListener('change', update);
+      else if (mq.addListener) mq.addListener(update);
+    });
     window.addEventListener('orientationchange', update);
     window.addEventListener('resize', update);
 
     return () => {
-      if (portrait.removeEventListener) portrait.removeEventListener('change', update);
-      else if (portrait.removeListener) portrait.removeListener(update);
+      mqs.forEach((mq) => {
+        if (mq.removeEventListener) mq.removeEventListener('change', update);
+        else if (mq.removeListener) mq.removeListener(update);
+      });
       window.removeEventListener('orientationchange', update);
       window.removeEventListener('resize', update);
     };
