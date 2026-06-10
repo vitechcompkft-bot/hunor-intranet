@@ -1,23 +1,6 @@
-@import "tailwindcss";
-
-@theme {
-  /* COOP leveles zöld paletta */
-  --color-brand-50: #f2f9ec;
-  --color-brand-100: #e0f1d2;
-  --color-brand-200: #c3e3a8;
-  --color-brand-300: #9fd176;
-  --color-brand-400: #7cbd4c;
-  --color-brand-500: #5fa531;
-  --color-brand-600: #4f9128;
-  --color-brand-700: #3f7222;
-  --color-brand-800: #345a20;
-  --color-brand-900: #2c4b1d;
-  /* Hunor Coop márkaszínek */
-  --color-hunor-red: #e2001a;
-  --color-hunor-green: #5aa23f;
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-script: "Pacifico", "Brush Script MT", cursive;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 html,
 body {
@@ -27,7 +10,7 @@ body {
 body {
   background: #f8fafc; /* slate-50 */
   color: #0f172a; /* slate-900 */
-  font-family: var(--font-sans);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -59,15 +42,15 @@ body {
   .input:focus {
     background-color: #ffffff;
   }
-
-  .font-script {
-    font-family: var(--font-script);
-  }
   .label {
     @apply block text-sm font-medium text-gray-700 mb-1;
   }
 
   .badge {
     @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .font-script {
+    font-family: "Pacifico", "Brush Script MT", cursive;
   }
 }
