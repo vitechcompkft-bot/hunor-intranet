@@ -10,6 +10,7 @@ type Tab = 'drive' | 'own';
 
 export function FilesTabs({ user }: { user: AppUser }) {
   const [tab, setTab] = useState<Tab>('drive');
+  const isStaff = user.role === 'admin' || user.role === 'kozpont';
 
   return (
     <div className="space-y-4">
@@ -38,7 +39,7 @@ export function FilesTabs({ user }: { user: AppUser }) {
         </button>
       </div>
 
-      {tab === 'drive' ? <DriveBrowser /> : <FolderBrowser user={user} embedded />}
+      {tab === 'drive' ? <DriveBrowser canManage={isStaff} /> : <FolderBrowser user={user} embedded />}
     </div>
   );
 }
