@@ -14,6 +14,31 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* PDF letöltés (nyomtatás): csak a dokumentáció jelenjen meg, teljes hosszában. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .doc-print,
+  .doc-print * {
+    visibility: visible;
+  }
+  .doc-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
 /* Táblagép (touch) elrendezés: fix magasságú keret, belül görgő tartalom.
    Így a fejléc + menü nem görög, a tartalom nem csúszik mögéjük.
    Álló (elforgatott) nézetben a látható magasság = 100vw (a keret magassága). */

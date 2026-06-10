@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { documentationText } from '@/lib/documentation';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -6,9 +7,12 @@ interface ChatMessage {
 }
 
 const SYSTEM_PROMPT =
-  'Te a HUNOR szövetkezet belső intranet rendszerének segítő asszisztense vagy. ' +
-  'Magyarul válaszolj, röviden és közérthetően. Segíts a bolti dolgozóknak és a központi ' +
-  'munkatársaknak az intranet használatában (hibajegyek, igénybekérők, fájlok, üzenetek).';
+  'Te a HUNOR Coop szövetkezet belső intranet rendszerének segítő asszisztense vagy. ' +
+  'Magyarul válaszolj, közérthetően, lépésről lépésre, ahogy egy bolti dolgozónak segítenél. ' +
+  'A válaszaidat az alábbi felhasználói dokumentációra alapozd. Ha a kérdés ebben nem szerepel, ' +
+  'mondd el, amit tudsz, és javasold, hogy forduljon a központhoz.\n\n' +
+  '=== FELHASZNÁLÓI DOKUMENTÁCIÓ ===\n' +
+  documentationText();
 
 export async function POST(request: Request) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
