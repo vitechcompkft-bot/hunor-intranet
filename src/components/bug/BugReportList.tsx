@@ -155,6 +155,7 @@ export function BugReportList({ user }: { user: AppUser }) {
                 <th className="px-4 py-3">Leírás</th>
                 <th className="px-4 py-3">Státusz</th>
                 <th className="px-4 py-3">Befejezés</th>
+                <th className="px-4 py-3">Megjegyzés</th>
                 <th className="px-4 py-3">Dátum</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -172,6 +173,9 @@ export function BugReportList({ user }: { user: AppUser }) {
                     <span className={`badge ${STATUS_BADGE[r.status]}`}>{r.status}</span>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{r.completion_date ?? '—'}</td>
+                  <td className="max-w-xs truncate px-4 py-3 text-gray-600" title={r.notes ?? ''}>
+                    {r.notes ?? '—'}
+                  </td>
                   <td className="px-4 py-3 text-gray-500">
                     {new Date(r.created_at).toLocaleDateString('hu-HU')}
                   </td>
@@ -248,8 +252,9 @@ function EditBugModal({
   onSaved: () => void;
 }) {
   const supabase = createClient();
+  const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD (helyi)
   const [status, setStatus] = useState<BugStatus>(report.status);
-  const [completion, setCompletion] = useState(report.completion_date ?? '');
+  const [completion, setCompletion] = useState(report.completion_date ?? today);
   const [notes, setNotes] = useState(report.notes ?? '');
   const [busy, setBusy] = useState(false);
 
