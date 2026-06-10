@@ -142,17 +142,19 @@ export function AppShell({
     </div>
   );
 
-  // ===== Érintős (tablet) elrendezés: felső menüsáv =====
+  // ===== Érintős (tablet) elrendezés: rögzített felső menüsáv =====
   if (touch) {
     return (
-      <div className="flex min-h-screen flex-col bg-slate-50">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-gray-200 bg-white px-3 relative">
+      <div className="min-h-screen bg-slate-50">
+        {/* Rögzített fejléc — az elforgatott kerethez tapad (a transform tartalmazó blokk miatt) */}
+        <header className="fixed inset-x-0 top-0 z-30 flex h-16 items-center justify-between gap-3 border-b border-gray-200 bg-white px-3">
           <Logo size={40} />
           {titleBlock}
           {userBlock}
         </header>
 
-        <nav className="sticky top-16 z-10 flex gap-1 overflow-x-auto border-b border-gray-200 bg-white px-2 py-1.5">
+        {/* Rögzített vízszintes menüsáv */}
+        <nav className="fixed inset-x-0 top-16 z-20 flex h-12 items-center gap-1 overflow-x-auto border-b border-gray-200 bg-white px-2">
           {items.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
@@ -171,8 +173,11 @@ export function AppShell({
           })}
         </nav>
 
-        {banner}
-        <main className="flex-1 p-3 sm:p-5">{children}</main>
+        {/* Tartalom a rögzített sávok alatt (pt = fejléc 64px + menü 48px) */}
+        <div className="pt-28">
+          {banner}
+          <main className="p-3 sm:p-5">{children}</main>
+        </div>
         {allowedSet.has('chat') && <ChatbotWidget />}
       </div>
     );
