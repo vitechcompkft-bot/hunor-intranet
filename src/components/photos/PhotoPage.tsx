@@ -22,7 +22,60 @@ interface DriveFolder {
   name: string;
 }
 
-const MAX_SIZE = 15 * 1024 * 1024;
+const MAX_SIZE = 25 * 1024 * 1024;
+
+/** Kép betöltése HTMLImageElement-be (FF93-kompatibilis). */
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    };
+    img.src = url;
+  });
+}
+
+/**
+ * Kliensoldali tömörítés: átméretezés max 1600px-re + JPEG, hogy a feltöltés
+ * jóval a Vercel 4,5 MB-os kérés-limitje alatt maradjon (és gyors legyen VPN-en).
+ */
+async function compressImage(
+  file: File,
+  maxDim = 1600,
+  quality = 0.82
+): Promise<{ blob: Blob; name: string }> {
+  try {
+    if (!file.type.startsWith('image/')) return { blob: file, name: file.name };
+    const img = await loadImage(file);
+    let w = img.naturalWidth;
+    let h = img.naturalHeight;
+    if (Math.max(w, h) > maxDim) {
+      const s = maxDim / Math.max(w, h);
+      w = Math.round(w * s);
+      h = Math.round(h * s);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { blob: file, name: file.name };
+    ctx.drawImage(img, 0, 0, w, h);
+    const blob: Blob | null = await new Promise((res) =>
+      canvas.toBlob((b) => res(b), 'image/jpeg', quality)
+    );
+    if (!blob) return { blob: file, name: file.name };
+    const name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+    return { blob, name };
+  } catch {
+    return { blob: file, name: file.name };
+  }
+}
 
 export function PhotoPage({ user }: { user: AppUser }) {
   const isStaff = user.role === 'admin' || user.role === 'kozpont';
@@ -190,10 +243,22 @@ function StorePhotos() {
     setError(null);
     try {
       const fd = new FormData();
-      files.forEach((f) => fd.append('file', f));
+      for (const f of files) {
+        const { blob, name } = await compressImage(f);
+        fd.append('file', blob, name);
+      }
       const res = await fetch('/api/drive/photo-upload', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Feltöltési hiba');
+      // Robusztus: a választ előbb szövegként olvassuk, csak utána próbáljuk JSON-ként
+      const txt = await res.text();
+      let data: { error?: string } = {};
+      try {
+        data = txt ? JSON.parse(txt) : {};
+      } catch {
+        /* nem JSON válasz */
+      }
+      if (!res.ok) {
+        throw new Error(data.error || `Feltöltési hiba (${res.status})`);
+      }
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Feltöltési hiba');
