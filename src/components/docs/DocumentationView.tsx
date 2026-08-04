@@ -33,6 +33,18 @@ function Block({ block }: { block: DocBlock }) {
           <span>{block.text}</span>
         </div>
       );
+    case 'img':
+      return (
+        <figure className="my-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={block.src}
+            alt={block.alt}
+            className="w-full max-w-2xl rounded-lg border border-gray-200 shadow-sm"
+          />
+          <figcaption className="mt-1 text-xs italic text-gray-400">{block.alt}</figcaption>
+        </figure>
+      );
   }
 }
 

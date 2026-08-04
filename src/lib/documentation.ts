@@ -6,7 +6,8 @@ export type DocBlock =
   | { type: 'h3'; text: string }
   | { type: 'ul'; items: string[] }
   | { type: 'ol'; items: string[] }
-  | { type: 'tip'; text: string };
+  | { type: 'tip'; text: string }
+  | { type: 'img'; src: string; alt: string };
 
 export interface DocSection {
   id: string;
@@ -72,6 +73,7 @@ export const DOCUMENTATION: DocSection[] = [
           'Visszalépés: a felső sorban lévő útvonalon (pl. „Intranet › Marketing") kattints arra a szintre, ahová vissza szeretnél lépni. A „Frissítés" ikonnal újratöltheted a mappát.',
         ],
       },
+      { type: 'img', src: '/docs/fajlok-megosztott.png', alt: 'Fájlok – Megosztott dokumentumok képernyő' },
       {
         type: 'h3',
         text: 'Saját mappa',
@@ -87,6 +89,7 @@ export const DOCUMENTATION: DocSection[] = [
           'Letöltés/megnyitás: kattints a fájl nevére.',
         ],
       },
+      { type: 'img', src: '/docs/fajlok-sajat.png', alt: 'Fájlok – Saját mappa képernyő' },
       {
         type: 'h3',
         text: 'Mappa létrehozása és feltöltés (központ/admin)',
@@ -124,6 +127,7 @@ export const DOCUMENTATION: DocSection[] = [
           'Kattints a „Beküldés" gombra.',
         ],
       },
+      { type: 'img', src: '/docs/uj-hibajegy.png', alt: 'Új hibajegy űrlap' },
       {
         type: 'h3',
         text: 'A hibajegyeid követése',
@@ -136,6 +140,7 @@ export const DOCUMENTATION: DocSection[] = [
           'A „Megjegyzés" oszlopban a központ válasza vagy a megoldás rövid leírása olvasható.',
         ],
       },
+      { type: 'img', src: '/docs/hibajegyek.png', alt: 'Hibajegyek lista' },
       {
         type: 'tip',
         text: 'Minél pontosabb a leírás és a prioritás, annál gyorsabban tud segíteni a központ. Sürgős, üzletmenetet akadályozó hibánál (pl. nem indul a kassza) válaszd a „Kritikus" prioritást.',
@@ -162,6 +167,7 @@ export const DOCUMENTATION: DocSection[] = [
           'A feltöltés után a kép a mai dátumú mappádba kerül, időbélyeges névvel (például 2026-06-10_14-23-05.jpg). Ha aznap még nem volt mappa, automatikusan elkészül.',
         ],
       },
+      { type: 'img', src: '/docs/fotok.png', alt: 'Fotók – feltöltés és galéria' },
       {
         type: 'h3',
         text: 'A feltöltött képek megtekintése',
