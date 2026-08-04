@@ -8,23 +8,44 @@ interface Msg {
   content: string;
 }
 
-/** Markdown-linkeket [szöveg](url) és nyers URL-eket kattinthatóvá tesz. */
+/**
+ * Egyszerű markdown-renderelő a chat válaszaihoz: [szöveg](url) és nyers URL
+ * linkek kattinthatóvá, **félkövér** és `kód` jelölés formázottá válik.
+ */
 function MessageText({ text, dark }: { text: string; dark: boolean }) {
   const linkCls = dark ? 'underline underline-offset-2' : 'font-medium text-brand-700 underline underline-offset-2';
+  const codeCls = dark
+    ? 'rounded bg-white/20 px-1 py-0.5 text-[0.85em]'
+    : 'rounded bg-gray-200 px-1 py-0.5 text-[0.85em] text-gray-800';
   const parts: ReactNode[] = [];
-  const re = /\[([^\]]+)\]\(([^)\s]+)\)|((?:https?:\/\/|\/api\/)[^\s)]+)/g;
+  const re =
+    /\[([^\]]+)\]\(([^)\s]+)\)|((?:https?:\/\/|\/api\/)[^\s)]+)|\*\*([^*]+)\*\*|`([^`]+)`/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(text.slice(last, m.index));
-    const href = m[2] ?? m[3];
-    const label = m[1] ?? m[3];
-    parts.push(
-      <a key={key++} href={href} target="_blank" rel="noopener noreferrer" className={linkCls}>
-        {label}
-      </a>
-    );
+    if (m[1] !== undefined || m[3] !== undefined) {
+      const href = m[2] ?? m[3];
+      const label = m[1] ?? m[3];
+      parts.push(
+        <a key={key++} href={href} target="_blank" rel="noopener noreferrer" className={linkCls}>
+          {label}
+        </a>
+      );
+    } else if (m[4] !== undefined) {
+      parts.push(
+        <strong key={key++} className="font-semibold">
+          {m[4]}
+        </strong>
+      );
+    } else if (m[5] !== undefined) {
+      parts.push(
+        <code key={key++} className={codeCls}>
+          {m[5]}
+        </code>
+      );
+    }
     last = re.lastIndex;
   }
   if (last < text.length) parts.push(text.slice(last));
