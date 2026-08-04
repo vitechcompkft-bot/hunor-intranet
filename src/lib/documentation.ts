@@ -37,6 +37,11 @@ export const DOCUMENTATION: DocSection[] = [
         ],
       },
       {
+        type: 'p',
+        text: 'Belépési adatok: a boltok a bolt@hunorcoop.hu email címmel, a trafikok a trafik@hunorcoop.hu email címmel lépnek be. A jelszó mindkét esetben: 7tlob_H1. A jelszó után válaszd ki a saját áruház- vagy trafikszámodat a legördülőből.',
+      },
+      { type: 'img', src: '/docs/bejelentkezes.png', alt: 'Bejelentkezés képernyő' },
+      {
         type: 'h3',
         text: 'Navigáció és kijelentkezés',
       },
