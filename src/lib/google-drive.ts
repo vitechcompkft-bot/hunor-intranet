@@ -290,47 +290,6 @@ export interface DocMatch {
   folderPath: string[];
 }
 
-interface IndexedItem {
-  id: string;
-  name: string;
-  isFolder: boolean;
-  path: string[]; // a szülő-mappák láncolata (a saját nevet NEM tartalmazza)
-}
-
-let docIndex: { at: number; items: IndexedItem[] } | null = null;
-const INDEX_TTL_MS = 5 * 60 * 1000;
-
-/** Az „Intranet" mappafa rekurzív bejárása (fájlok + mappák teljes útvonallal). */
-async function buildIntranetIndex(): Promise<IndexedItem[]> {
-  const rootId = await resolveIntranetFolderId();
-  if (!rootId) return [];
-  const items: IndexedItem[] = [];
-  const queue: { id: string; path: string[] }[] = [{ id: rootId, path: ['Intranet'] }];
-  let folders = 0;
-  while (queue.length && folders < 500) {
-    const cur = queue.shift()!;
-    folders++;
-    let children: DriveItem[];
-    try {
-      children = await listDriveFolder(cur.id);
-    } catch {
-      continue;
-    }
-    for (const c of children) {
-      items.push({ id: c.id, name: c.name, isFolder: c.isFolder, path: cur.path });
-      if (c.isFolder) queue.push({ id: c.id, path: [...cur.path, c.name] });
-    }
-  }
-  return items;
-}
-
-async function getIntranetIndex(): Promise<IndexedItem[]> {
-  if (docIndex && Date.now() - docIndex.at < INDEX_TTL_MS) return docIndex.items;
-  const items = await buildIntranetIndex();
-  docIndex = { at: Date.now(), items };
-  return items;
-}
-
 /** Ékezet- és kisbetű-független normalizálás. */
 function norm(s: string): string {
   return s
@@ -339,61 +298,112 @@ function norm(s: string): string {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
-/** Drive tartalmi (fullText) keresés — a talált fájl-azonosítók halmaza. */
-async function driveFullTextIds(query: string): Promise<Set<string>> {
-  const safe = query.replace(/['\\]/g, ' ').trim();
-  if (!safe) return new Set();
-  const q = encodeURIComponent(`fullText contains '${safe}' and trashed=false`);
+// mappa-metaadat cache (id → {name, parents}) — a mappaszerkezet ritkán változik
+const folderMetaCache = new Map<string, { name: string; parents: string[] }>();
+let intranetIdCache: { id: string | null; at: number } | null = null;
+const INTRANET_ID_TTL_MS = 30 * 60 * 1000;
+
+async function getIntranetId(): Promise<string | null> {
+  if (intranetIdCache && Date.now() - intranetIdCache.at < INTRANET_ID_TTL_MS) return intranetIdCache.id;
+  const id = await resolveIntranetFolderId();
+  intranetIdCache = { id, at: Date.now() };
+  return id;
+}
+
+async function getFolderMeta(id: string): Promise<{ name: string; parents: string[] } | null> {
+  const cached = folderMetaCache.get(id);
+  if (cached) return cached;
+  try {
+    const res = await driveFetch(`/files/${id}?fields=name,parents&supportsAllDrives=true`);
+    if (!res.ok) return null;
+    const d = await res.json();
+    const meta = { name: d.name as string, parents: (d.parents as string[]) ?? [] };
+    folderMetaCache.set(id, meta);
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+/** A találat mappa-útvonala az Intranet gyökértől, vagy null ha nem az Intranet alatt van. */
+async function resolvePathUnderIntranet(parents: string[]): Promise<string[] | null> {
+  const intranetId = await getIntranetId();
+  if (!intranetId) return null;
+  const chain: string[] = [];
+  let currentId: string | undefined = parents[0];
+  for (let hop = 0; hop < 12 && currentId; hop++) {
+    if (currentId === intranetId) return ['Intranet', ...chain.reverse()];
+    const meta = await getFolderMeta(currentId);
+    if (!meta) break;
+    chain.push(meta.name);
+    currentId = meta.parents[0];
+  }
+  return null;
+}
+
+interface DriveHit {
+  id: string;
+  name: string;
+  mimeType: string;
+  parents?: string[];
+}
+
+/** Egy Drive keresés futtatása (q kifejezéssel). */
+async function driveSearch(q: string): Promise<DriveHit[]> {
   try {
     const res = await driveFetch(
-      `/files?q=${q}&fields=files(id)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true`
+      `/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,parents)` +
+        `&pageSize=40&supportsAllDrives=true&includeItemsFromAllDrives=true`
     );
-    if (!res.ok) return new Set();
-    const data = await res.json();
-    return new Set((data.files ?? []).map((f: { id: string }) => f.id));
+    if (!res.ok) return [];
+    return (await res.json()).files ?? [];
   } catch {
-    return new Set();
+    return [];
   }
 }
 
 /**
- * Rákeres az Intranet megosztott dokumentumaira név, mappa-útvonal és tartalom
- * alapján. A legjobb találatokat adja vissza (fájlok és mappák).
+ * Rákeres az Intranet megosztott dokumentumaira. NEM indexeli az egész fát
+ * (az lassú), hanem a Drive keresőjével keres (név + tartalom), majd a
+ * találatok szülő-láncát járja fel, és csak az Intranet alattiakat tartja meg.
  */
 export async function searchIntranetDocuments(query: string, limit = 8): Promise<DocMatch[]> {
-  const items = await getIntranetIndex();
-  if (items.length === 0) return [];
+  const rawTokens = query.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3);
+  const esc = (s: string) => s.replace(/['\\]/g, ' ').trim();
 
-  const tokens = norm(query)
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 3);
+  const queries: string[] = [];
+  const fullQ = esc(query);
+  if (fullQ) queries.push(`fullText contains '${fullQ}' and trashed=false`);
+  const nameClauses = rawTokens
+    .slice(0, 4)
+    .map((t) => esc(t))
+    .filter((t) => t.length >= 3)
+    .map((t) => `name contains '${t}'`);
+  if (nameClauses.length) queries.push(`(${nameClauses.join(' or ')}) and trashed=false`);
+  if (queries.length === 0) return [];
 
-  const contentIds = await driveFullTextIds(query);
+  const resultSets = await Promise.all(queries.map((q) => driveSearch(q)));
+  const seen = new Map<string, DriveHit>();
+  for (const set of resultSets) for (const f of set) if (!seen.has(f.id)) seen.set(f.id, f);
 
-  const scored = items
-    .map((it) => {
-      const nameN = norm(it.name);
-      const pathN = norm(it.path.join(' '));
-      let score = 0;
-      for (const t of tokens) {
-        if (nameN.includes(t)) score += 3;
-        else if (pathN.includes(t)) score += 1;
-      }
-      if (contentIds.has(it.id)) score += 4; // tartalmi egyezés
-      // mappát csak akkor, ha a neve tényleg illik (ne uralják a listát)
-      if (it.isFolder) score = score >= 3 ? score : 0;
-      return { it, score };
-    })
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
-
-  return scored.map((x) => ({
-    id: x.it.id,
-    name: x.it.name,
-    isFolder: x.it.isFolder,
-    folderPath: x.it.path,
-  }));
+  const tokensN = rawTokens.map(norm);
+  const scored: (DocMatch & { score: number })[] = [];
+  for (const f of seen.values()) {
+    const path = await resolvePathUnderIntranet(f.parents ?? []);
+    if (!path) continue; // nem az Intranet megosztott dokumentumai alatt van
+    const nameN = norm(f.name);
+    let score = 1; // benne van a találati halmazban (tartalmi vagy név egyezés)
+    for (const t of tokensN) if (nameN.includes(t)) score += 3;
+    scored.push({
+      id: f.id,
+      name: f.name,
+      isFolder: f.mimeType === FOLDER_MIME,
+      folderPath: path,
+      score,
+    });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map(({ score: _score, ...m }) => m);
 }
 
 /** Fájl feltöltése egy mappába (multipart). */

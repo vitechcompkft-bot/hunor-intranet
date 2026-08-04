@@ -4,6 +4,7 @@ import { documentationText } from '@/lib/documentation';
 import { searchIntranetDocuments, isDriveConnected } from '@/lib/google-drive';
 
 export const runtime = 'nodejs';
+export const maxDuration = 30;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
