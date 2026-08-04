@@ -1,11 +1,34 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, type ReactNode } from 'react';
 import { Send, Loader2, Bot } from 'lucide-react';
 
 interface Msg {
   role: 'user' | 'assistant';
   content: string;
+}
+
+/** Markdown-linkeket [szöveg](url) és nyers URL-eket kattinthatóvá tesz. */
+function MessageText({ text, dark }: { text: string; dark: boolean }) {
+  const linkCls = dark ? 'underline underline-offset-2' : 'font-medium text-brand-700 underline underline-offset-2';
+  const parts: ReactNode[] = [];
+  const re = /\[([^\]]+)\]\(([^)\s]+)\)|((?:https?:\/\/|\/api\/)[^\s)]+)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const href = m[2] ?? m[3];
+    const label = m[1] ?? m[3];
+    parts.push(
+      <a key={key++} href={href} target="_blank" rel="noopener noreferrer" className={linkCls}>
+        {label}
+      </a>
+    );
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <>{parts}</>;
 }
 
 export function ChatPanel({ compact = false }: { compact?: boolean }) {
@@ -54,7 +77,7 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
                   : 'bg-gray-100 text-gray-800'
               }`}
             >
-              {m.content}
+              <MessageText text={m.content} dark={m.role === 'user'} />
             </div>
           </div>
         ))}

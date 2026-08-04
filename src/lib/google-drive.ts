@@ -280,6 +280,122 @@ export async function deleteDriveItem(id: string): Promise<void> {
   }
 }
 
+// === Dokumentum-kereső (chatbot) ============================================
+
+export interface DocMatch {
+  id: string;
+  name: string;
+  isFolder: boolean;
+  /** Mappa-útvonal az Intranet gyökértől a szülőig, pl. ['Intranet','Szabályzatok']. */
+  folderPath: string[];
+}
+
+interface IndexedItem {
+  id: string;
+  name: string;
+  isFolder: boolean;
+  path: string[]; // a szülő-mappák láncolata (a saját nevet NEM tartalmazza)
+}
+
+let docIndex: { at: number; items: IndexedItem[] } | null = null;
+const INDEX_TTL_MS = 5 * 60 * 1000;
+
+/** Az „Intranet" mappafa rekurzív bejárása (fájlok + mappák teljes útvonallal). */
+async function buildIntranetIndex(): Promise<IndexedItem[]> {
+  const rootId = await resolveIntranetFolderId();
+  if (!rootId) return [];
+  const items: IndexedItem[] = [];
+  const queue: { id: string; path: string[] }[] = [{ id: rootId, path: ['Intranet'] }];
+  let folders = 0;
+  while (queue.length && folders < 500) {
+    const cur = queue.shift()!;
+    folders++;
+    let children: DriveItem[];
+    try {
+      children = await listDriveFolder(cur.id);
+    } catch {
+      continue;
+    }
+    for (const c of children) {
+      items.push({ id: c.id, name: c.name, isFolder: c.isFolder, path: cur.path });
+      if (c.isFolder) queue.push({ id: c.id, path: [...cur.path, c.name] });
+    }
+  }
+  return items;
+}
+
+async function getIntranetIndex(): Promise<IndexedItem[]> {
+  if (docIndex && Date.now() - docIndex.at < INDEX_TTL_MS) return docIndex.items;
+  const items = await buildIntranetIndex();
+  docIndex = { at: Date.now(), items };
+  return items;
+}
+
+/** Ékezet- és kisbetű-független normalizálás. */
+function norm(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Drive tartalmi (fullText) keresés — a talált fájl-azonosítók halmaza. */
+async function driveFullTextIds(query: string): Promise<Set<string>> {
+  const safe = query.replace(/['\\]/g, ' ').trim();
+  if (!safe) return new Set();
+  const q = encodeURIComponent(`fullText contains '${safe}' and trashed=false`);
+  try {
+    const res = await driveFetch(
+      `/files?q=${q}&fields=files(id)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true`
+    );
+    if (!res.ok) return new Set();
+    const data = await res.json();
+    return new Set((data.files ?? []).map((f: { id: string }) => f.id));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Rákeres az Intranet megosztott dokumentumaira név, mappa-útvonal és tartalom
+ * alapján. A legjobb találatokat adja vissza (fájlok és mappák).
+ */
+export async function searchIntranetDocuments(query: string, limit = 8): Promise<DocMatch[]> {
+  const items = await getIntranetIndex();
+  if (items.length === 0) return [];
+
+  const tokens = norm(query)
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+
+  const contentIds = await driveFullTextIds(query);
+
+  const scored = items
+    .map((it) => {
+      const nameN = norm(it.name);
+      const pathN = norm(it.path.join(' '));
+      let score = 0;
+      for (const t of tokens) {
+        if (nameN.includes(t)) score += 3;
+        else if (pathN.includes(t)) score += 1;
+      }
+      if (contentIds.has(it.id)) score += 4; // tartalmi egyezés
+      // mappát csak akkor, ha a neve tényleg illik (ne uralják a listát)
+      if (it.isFolder) score = score >= 3 ? score : 0;
+      return { it, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  return scored.map((x) => ({
+    id: x.it.id,
+    name: x.it.name,
+    isFolder: x.it.isFolder,
+    folderPath: x.it.path,
+  }));
+}
+
 /** Fájl feltöltése egy mappába (multipart). */
 export async function uploadFileToDrive(
   folderId: string,

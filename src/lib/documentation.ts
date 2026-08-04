@@ -107,6 +107,10 @@ export const DOCUMENTATION: DocSection[] = [
         type: 'tip',
         text: 'Egy feltöltött fájl mérete legfeljebb kb. 4 MB lehet. Ennél nagyobb dokumentumnál bontsd kisebb részekre, vagy jelezd a rendszergazdának.',
       },
+      {
+        type: 'tip',
+        text: 'Nem tudod, melyik mappában van egy dokumentum? Kérdezd meg a Chat asszisztenst (pl. „Hol találom a HACCP szabályzatot?") — rákeres a megosztott dokumentumok között, és megmondja a mappát, sőt közvetlen linket is ad hozzá.',
+      },
     ],
   },
   {
