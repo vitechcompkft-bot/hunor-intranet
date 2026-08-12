@@ -173,35 +173,115 @@ export async function getFolderName(folderId: string): Promise<string> {
   return (await res.json()).name ?? '';
 }
 
-/** Google-natív dokumentumok export MIME-típusa, vagy null bináris fájlnál. */
-function exportMimeFor(mimeType: string): string | null {
-  if (mimeType === 'application/vnd.google-apps.document') return 'application/pdf';
-  if (mimeType === 'application/vnd.google-apps.spreadsheet')
-    return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  if (mimeType === 'application/vnd.google-apps.presentation') return 'application/pdf';
-  return null;
+/**
+ * Google-natív dokumentumok PDF-exportja megtekintéshez (mindhárom típus PDF,
+ * hogy iPad Safari beágyazva meg tudja nyitni — az xlsx/pptx-et nem tudná).
+ */
+function googleNativeToPdf(mimeType: string): boolean {
+  return (
+    mimeType === 'application/vnd.google-apps.document' ||
+    mimeType === 'application/vnd.google-apps.spreadsheet' ||
+    mimeType === 'application/vnd.google-apps.presentation'
+  );
 }
 
-/** Egy fájl letöltése (bináris) vagy Google-doksi exportja. */
+/**
+ * Feltöltött Office-fájl → a megfelelő Google-natív MIME (a copy-konverzióhoz),
+ * vagy null, ha nem konvertálandó Office-típus.
+ */
+function officeToGoogleMime(mimeType: string): string | null {
+  switch (mimeType) {
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    case 'application/msword':
+      return 'application/vnd.google-apps.document';
+    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+    case 'application/vnd.ms-excel':
+      return 'application/vnd.google-apps.spreadsheet';
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+    case 'application/vnd.ms-powerpoint':
+      return 'application/vnd.google-apps.presentation';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Office-fájl PDF-be konvertálása a Drive-on keresztül: ideiglenes Google-natív
+ * másolat készítése → PDF-export → a másolat törlése. A szerver OAuth-tokenjével
+ * fut (nincs szükség a néző Google-fiókjára), így VPN alatt is működik.
+ */
+async function convertOfficeToPdf(fileId: string, googleMime: string): Promise<ArrayBuffer> {
+  const token = await getAccessToken();
+  const auth = { Authorization: `Bearer ${token}` };
+
+  // 1) Ideiglenes másolat Google-formátumban
+  const copyRes = await fetch(`${DRIVE_API}/files/${fileId}/copy?supportsAllDrives=true&fields=id`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `__tmp_pdf_${fileId}`, mimeType: googleMime }),
+  });
+  if (!copyRes.ok) throw new Error('Konverzió (copy) hiba: ' + (await copyRes.text()));
+  const tmpId = (await copyRes.json()).id as string;
+
+  try {
+    // 2) PDF-export
+    const pdfRes = await fetch(
+      `${DRIVE_API}/files/${tmpId}/export?mimeType=${encodeURIComponent('application/pdf')}`,
+      { headers: auth }
+    );
+    if (!pdfRes.ok) throw new Error('Konverzió (export) hiba: ' + (await pdfRes.text()));
+    return await pdfRes.arrayBuffer();
+  } finally {
+    // 3) Ideiglenes másolat törlése (best-effort)
+    await fetch(`${DRIVE_API}/files/${tmpId}?supportsAllDrives=true`, {
+      method: 'DELETE',
+      headers: auth,
+    }).catch(() => {});
+  }
+}
+
+/** Egy fájl megtekintésre: Google-doksi/Office → PDF, egyéb bináris → eredeti. */
 export async function fetchDriveFile(
   fileId: string
 ): Promise<{ body: ArrayBuffer; contentType: string; filename: string }> {
   const metaRes = await driveFetch(`/files/${fileId}?fields=name,mimeType&supportsAllDrives=true`);
   if (!metaRes.ok) throw new Error('Fájl nem található');
   const meta = await metaRes.json();
-  const exportMime = exportMimeFor(meta.mimeType);
-
+  const mimeType = meta.mimeType as string;
+  const rawName = meta.name as string;
   const token = await getAccessToken();
-  const url = exportMime
-    ? `${DRIVE_API}/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`
-    : `${DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error('Letöltési hiba: ' + (await res.text()));
 
-  const contentType = exportMime ?? res.headers.get('content-type') ?? 'application/octet-stream';
-  let filename = meta.name as string;
-  if (exportMime === 'application/pdf' && !filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
-  return { body: await res.arrayBuffer(), contentType, filename };
+  const pdfName = () => (rawName.toLowerCase().endsWith('.pdf') ? rawName : `${rawName}.pdf`);
+
+  // Google-natív doksi → PDF-export
+  if (googleNativeToPdf(mimeType)) {
+    const res = await fetch(
+      `${DRIVE_API}/files/${fileId}/export?mimeType=${encodeURIComponent('application/pdf')}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw new Error('Letöltési hiba: ' + (await res.text()));
+    return { body: await res.arrayBuffer(), contentType: 'application/pdf', filename: pdfName() };
+  }
+
+  // Feltöltött Office-fájl → PDF-konverzió (hogy iPad Safari inline megnyissa).
+  // Ha a konverzió elhasalna (pl. túl nagy fájl), visszaesünk az eredeti fájlra.
+  const googleMime = officeToGoogleMime(mimeType);
+  if (googleMime) {
+    try {
+      const pdf = await convertOfficeToPdf(fileId, googleMime);
+      return { body: pdf, contentType: 'application/pdf', filename: pdfName() };
+    } catch {
+      // fallthrough az eredeti bináris kiszolgálásához
+    }
+  }
+
+  // Egyéb (PDF, kép, ismeretlen bináris) → eredeti fájl változatlanul
+  const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('Letöltési hiba: ' + (await res.text()));
+  const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+  return { body: await res.arrayBuffer(), contentType, filename: rawName };
 }
 
 // === Fotó funkció: boltszám-mappák a Drive gyökerében ========================
