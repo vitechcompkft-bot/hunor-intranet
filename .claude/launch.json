@@ -5,7 +5,7 @@
       "name": "hunor-intranet",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 3000
+      "port": 3204
     }
   ]
 }

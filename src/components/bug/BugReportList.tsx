@@ -8,6 +8,7 @@ import { Modal } from '@/components/ui/Modal';
 import { BugReportForm } from './BugReportForm';
 import { getSignedUrl } from '@/lib/storage';
 import { exportTablePdf, exportTableExcel, type ExportColumn } from '@/lib/exports';
+import { userScopeNumber } from '@/lib/types';
 import type { AppUser, BugReport, BugStatus } from '@/lib/types';
 
 const STATUS_BADGE: Record<BugStatus, string> = {
@@ -33,13 +34,20 @@ export function BugReportList({ user }: { user: AppUser }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
+    let query = supabase
       .from('bug_reports')
       .select('*')
       .order('created_at', { ascending: false });
+    // Bolt/trafik felhasználó csak a saját boltja hibajegyeit látja. A szűrés
+    // az app-rétegben történik (az RLS store-scope-ja megosztott fióknál nem
+    // hordozható a JWT-ben) — a saját munkamenet boltszámára szűkítünk.
+    if (!isStaff) {
+      query = query.eq('store_number', userScopeNumber(user) ?? '\0');
+    }
+    const { data } = await query;
     setReports((data as BugReport[]) ?? []);
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, isStaff, user]);
 
   useEffect(() => {
     load();

@@ -96,19 +96,15 @@ function LoginForm() {
         return;
       }
 
-      // Bolt/trafik szám frissítése az app_metadata-ban, ha választott
+      // Bolt/trafik szám munkamenet-szintű beállítása (httpOnly cookie), ha választott.
+      // NEM az app_metadata-ba írjuk, mert azt a megosztott fiókon minden belépés
+      // felülírná — így párhuzamos belépéseknél mindenki az utolsó boltszámát kapta.
       if (storeNumber) {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.rpc('update_user_store_number', {
-            user_id: user.id,
-            new_store_number: storeNumber,
-          });
-          // Friss token az új app_metadata-val
-          await supabase.auth.refreshSession();
-        }
+        await fetch('/api/session/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ number: storeNumber }),
+        });
       }
 
       await logAttempt(true);

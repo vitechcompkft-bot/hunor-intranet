@@ -93,6 +93,9 @@ export function AppShell({
   }
 
   async function logout() {
+    // A munkamenet-szintű boltszám cookie törlése, hogy a következő belépő
+    // ne örökölje az előző bolt számát ugyanabban a böngészőben.
+    await fetch('/api/session/store', { method: 'DELETE' }).catch(() => {});
     await supabase.auth.signOut();
     router.replace('/login');
     router.refresh();
