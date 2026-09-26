@@ -116,6 +116,15 @@ export interface StoreListRow {
   sort_order: number;
 }
 
+/** Admin által létrehozott videokonferencia-szoba. */
+export interface VideoRoom {
+  id: string;
+  name: string;
+  room_key: string;
+  created_by: string | null;
+  created_at: string;
+}
+
 export interface PhotoRow {
   id: string;
   store_number: string | null;
