@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Video, LogIn, LogOut, Plus, Trash2, Loader2, Users, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { userScopeNumber } from '@/lib/types';
@@ -96,24 +96,7 @@ export function VideoConference({ user }: { user: AppUser }) {
 
   // ===== Aktív hívás =====
   if (active) {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="badge bg-brand-100 text-brand-700">Szoba: {active.name}</span>
-          <button onClick={() => setActive(null)} className="btn-danger">
-            <LogOut size={16} /> Kilépés
-          </button>
-        </div>
-        <div className="card overflow-hidden">
-          <iframe
-            src={`https://meet.jit.si/${encodeURIComponent(active.room_key)}`}
-            allow="camera; microphone; fullscreen; display-capture; autoplay"
-            className="h-[70vh] w-full border-0"
-            title="Videó konferencia"
-          />
-        </div>
-      </div>
-    );
+    return <ActiveCall room={active} onLeave={() => setActive(null)} />;
   }
 
   return (
@@ -364,5 +347,136 @@ function DeleteRoom({
     <button onClick={del} className="btn-danger" disabled={busy} title="Szoba törlése">
       {busy ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
     </button>
+  );
+}
+
+// ============================================================================
+// Aktív hívás: 8x8 JaaS beágyazás moderátor-tokennel (nincs "várakozás a hostra").
+// Ha a JaaS kulcsok nincsenek beállítva, visszaesés a nyilvános meet.jit.si-re.
+// ============================================================================
+declare global {
+  interface Window {
+    JitsiMeetExternalAPI?: new (
+      domain: string,
+      options: Record<string, unknown>
+    ) => { addEventListener: (event: string, cb: () => void) => void; dispose: () => void };
+  }
+}
+
+const scriptPromises: Record<string, Promise<void>> = {};
+function loadScript(src: string): Promise<void> {
+  if (typeof window !== 'undefined' && window.JitsiMeetExternalAPI) return Promise.resolve();
+  if (src in scriptPromises) return scriptPromises[src];
+  scriptPromises[src] = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('A videó modul betöltése nem sikerült.'));
+    document.body.appendChild(s);
+  });
+  return scriptPromises[src];
+}
+
+function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const apiRef = useRef<{
+    addEventListener: (event: string, cb: () => void) => void;
+    dispose: () => void;
+  } | null>(null);
+  const [mode, setMode] = useState<'loading' | 'jaas' | 'fallback' | 'error'>('loading');
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/video/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomKey: room.room_key }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Csatlakozási hiba');
+        if (cancelled) return;
+
+        if (!data.configured) {
+          setMode('fallback');
+          return;
+        }
+
+        await loadScript(`https://8x8.vc/${data.appId}/external_api.js`);
+        if (cancelled || !containerRef.current || !window.JitsiMeetExternalAPI) return;
+
+        apiRef.current = new window.JitsiMeetExternalAPI('8x8.vc', {
+          roomName: `${data.appId}/${room.room_key}`,
+          jwt: data.token,
+          parentNode: containerRef.current,
+          configOverwrite: { prejoinPageEnabled: false },
+        });
+        apiRef.current.addEventListener('readyToClose', onLeave);
+        setMode('jaas');
+      } catch (e) {
+        if (cancelled) return;
+        setErrMsg(e instanceof Error ? e.message : 'Hiba');
+        setMode('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try {
+        apiRef.current?.dispose();
+      } catch {
+        /* noop */
+      }
+      apiRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.room_key]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="badge bg-brand-100 text-brand-700">Szoba: {room.name}</span>
+        <button
+          onClick={() => {
+            try {
+              apiRef.current?.dispose();
+            } catch {
+              /* noop */
+            }
+            onLeave();
+          }}
+          className="btn-danger"
+        >
+          <LogOut size={16} /> Kilépés
+        </button>
+      </div>
+
+      {mode === 'fallback' ? (
+        <div className="card overflow-hidden">
+          <iframe
+            src={`https://meet.jit.si/${encodeURIComponent(room.room_key)}`}
+            allow="camera; microphone; fullscreen; display-capture; autoplay"
+            className="h-[70vh] w-full border-0"
+            title="Videó konferencia"
+          />
+        </div>
+      ) : (
+        <div className="card relative overflow-hidden">
+          <div ref={containerRef} className="h-[70vh] w-full" />
+          {mode === 'loading' && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-gray-400">
+              <Loader2 className="animate-spin" />
+            </div>
+          )}
+          {mode === 'error' && (
+            <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-red-600">
+              {errMsg ?? 'Nem sikerült csatlakozni a híváshoz.'}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
