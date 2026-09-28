@@ -359,7 +359,11 @@ declare global {
     JitsiMeetExternalAPI?: new (
       domain: string,
       options: Record<string, unknown>
-    ) => { addEventListener: (event: string, cb: () => void) => void; dispose: () => void };
+    ) => {
+      addEventListener: (event: string, cb: () => void) => void;
+      executeCommand: (command: string) => void;
+      dispose: () => void;
+    };
   }
 }
 
@@ -382,10 +386,31 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const apiRef = useRef<{
     addEventListener: (event: string, cb: () => void) => void;
+    executeCommand: (command: string) => void;
     dispose: () => void;
   } | null>(null);
   const [mode, setMode] = useState<'loading' | 'jaas' | 'fallback' | 'error'>('loading');
   const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  // A hívás rendezett lezárása: előbb kilépünk a konferenciából (hangup),
+  // majd megsemmisítjük a példányt — pontosan EGYSZER (a ref nullázása védi a
+  // dupla lezárástól). Enélkül a régi kapcsolat nyitva maradt, és
+  // újracsatlakozáskor halmozódtak a "szellem" résztvevők.
+  const teardown = () => {
+    const api = apiRef.current;
+    apiRef.current = null;
+    if (!api) return;
+    try {
+      api.executeCommand('hangup');
+    } catch {
+      /* noop */
+    }
+    try {
+      api.dispose();
+    } catch {
+      /* noop */
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -429,12 +454,7 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
     })();
     return () => {
       cancelled = true;
-      try {
-        apiRef.current?.dispose();
-      } catch {
-        /* noop */
-      }
-      apiRef.current = null;
+      teardown();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.room_key]);
@@ -445,11 +465,7 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
         <span className="badge bg-brand-100 text-brand-700">Szoba: {room.name}</span>
         <button
           onClick={() => {
-            try {
-              apiRef.current?.dispose();
-            } catch {
-              /* noop */
-            }
+            teardown();
             onLeave();
           }}
           className="btn-danger"
