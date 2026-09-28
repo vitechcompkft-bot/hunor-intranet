@@ -4,6 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, LogIn, Loader2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { SCOPE_COOKIE } from '@/lib/scope';
 import { Logo } from '@/components/Logo';
 
 interface StoreOption {
@@ -96,15 +97,19 @@ function LoginForm() {
         return;
       }
 
-      // Bolt/trafik szám munkamenet-szintű beállítása (httpOnly cookie), ha választott.
-      // NEM az app_metadata-ba írjuk, mert azt a megosztott fiókon minden belépés
-      // felülírná — így párhuzamos belépéseknél mindenki az utolsó boltszámát kapta.
+      // Bolt/trafik szám munkamenet-szintű beállítása KLIENS OLDALON (szinkron,
+      // hálózat nélkül). Korábban ez egy /api/session/store fetch volt, ami iPaden
+      // egy hálózati hiccupnál "Load failed"-del elhasalt és MEGAKASZTOTTA a
+      // bejelentkezést (pedig a signIn már sikerült). A cookie nem biztonsági
+      // határ (megosztott fiók, app-rétegű szűrés), ezért kliens oldalon állítjuk.
       if (storeNumber) {
-        await fetch('/api/session/store', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ number: storeNumber }),
-        });
+        try {
+          document.cookie = `${SCOPE_COOKIE}=${encodeURIComponent(
+            storeNumber
+          )}; path=/; max-age=86400; samesite=lax`;
+        } catch {
+          /* a cookie hiánya legfeljebb a boltszámot érinti, a belépést nem */
+        }
       }
 
       await logAttempt(true);

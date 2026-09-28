@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { LogOut, Menu, X, Bell, Check } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { SCOPE_COOKIE } from '@/lib/scope';
 import { Logo } from '@/components/Logo';
 import { NAV_ITEMS, type NavKey } from '@/lib/nav';
 import { ChatbotWidget } from '@/components/chat/ChatbotWidget';
@@ -93,9 +94,15 @@ export function AppShell({
   }
 
   async function logout() {
-    // A munkamenet-szintű boltszám cookie törlése, hogy a következő belépő
-    // ne örökölje az előző bolt számát ugyanabban a böngészőben.
-    await fetch('/api/session/store', { method: 'DELETE' }).catch(() => {});
+    // A munkamenet-szintű boltszám cookie törlése, hogy a következő belépő ne
+    // örökölje az előző bolt számát. Kliens oldalon (hálózat nélkül), plusz a
+    // route best-effort takarítja a korábbi httpOnly cookie-t is (nem várjuk be).
+    try {
+      document.cookie = `${SCOPE_COOKIE}=; path=/; max-age=0; samesite=lax`;
+    } catch {
+      /* noop */
+    }
+    fetch('/api/session/store', { method: 'DELETE' }).catch(() => {});
     await supabase.auth.signOut();
     router.replace('/login');
     router.refresh();
