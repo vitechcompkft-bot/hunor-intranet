@@ -391,25 +391,41 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
   } | null>(null);
   const [mode, setMode] = useState<'loading' | 'jaas' | 'fallback' | 'error'>('loading');
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // A hívás rendezett lezárása: előbb kilépünk a konferenciából (hangup),
-  // majd megsemmisítjük a példányt — pontosan EGYSZER (a ref nullázása védi a
-  // dupla lezárástól). Enélkül a régi kapcsolat nyitva maradt, és
-  // újracsatlakozáskor halmozódtak a "szellem" résztvevők.
-  const teardown = () => {
+  // A beágyazás megsemmisítése (csak a példány bontása, hangup NÉLKÜL — a
+  // tényleges kilépést a hangup + readyToClose intézi, lásd requestLeave).
+  const disposeApi = () => {
     const api = apiRef.current;
     apiRef.current = null;
-    if (!api) return;
+    if (api) {
+      try {
+        api.dispose();
+      } catch {
+        /* noop */
+      }
+    }
+  };
+
+  // Rendezett kilépés a gombról: előbb HANGUP (ezt a szervernek el kell küldeni),
+  // majd megvárjuk a Jitsi 'readyToClose' eseményét — az hívja az onLeave-et, ami
+  // unmountol és disposeApi-t futtat. Ha azonnal disposolnánk, elvágnánk a hangup
+  // jelzést → a régi résztvevő bent maradna (halmozódó "szellemek").
+  const requestLeave = () => {
+    const api = apiRef.current;
+    if (!api) {
+      onLeave();
+      return;
+    }
     try {
       api.executeCommand('hangup');
     } catch {
-      /* noop */
+      onLeave();
+      return;
     }
-    try {
-      api.dispose();
-    } catch {
-      /* noop */
-    }
+    // Biztonsági tartalék, ha a readyToClose valamiért nem érkezne meg.
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    leaveTimer.current = setTimeout(onLeave, 1500);
   };
 
   useEffect(() => {
@@ -454,7 +470,8 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
     })();
     return () => {
       cancelled = true;
-      teardown();
+      if (leaveTimer.current) clearTimeout(leaveTimer.current);
+      disposeApi();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.room_key]);
@@ -464,10 +481,7 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
       <div className="flex items-center justify-between">
         <span className="badge bg-brand-100 text-brand-700">Szoba: {room.name}</span>
         <button
-          onClick={() => {
-            teardown();
-            onLeave();
-          }}
+          onClick={requestLeave}
           className="btn-danger"
         >
           <LogOut size={16} /> Kilépés
