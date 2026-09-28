@@ -59,12 +59,26 @@ export async function POST(req: Request) {
     }
   }
 
-  const token = signJaasToken({
-    appId,
-    keyId,
-    privateKey,
-    user: { id: user.id, name: user.username, email: user.email, moderator: isStaff },
-  });
+  let token: string;
+  try {
+    token = signJaasToken({
+      appId,
+      keyId,
+      privateKey,
+      user: { id: user.id, name: user.username, email: user.email, moderator: isStaff },
+    });
+  } catch (e) {
+    // Leggyakrabban a JAAS_PRIVATE_KEY formátuma rossz (hiányzó sortörések,
+    // levágott PEM, felesleges idézőjel). A valódi okot visszaadjuk a kliensnek.
+    return NextResponse.json(
+      {
+        error:
+          'Token aláírási hiba (valószínűleg a JAAS_PRIVATE_KEY formátuma): ' +
+          (e instanceof Error ? e.message : 'ismeretlen hiba'),
+      },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({ configured: true, token, appId });
 }
