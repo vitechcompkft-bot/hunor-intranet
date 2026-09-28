@@ -29,7 +29,10 @@ export function signJaasToken(opts: {
 }): string {
   const now = Math.floor(Date.now() / 1000);
 
-  const header = { alg: 'RS256', kid: opts.keyId, typ: 'JWT' };
+  // A JaaS a JWT-ben a `kid`-et `AppID/KeyID` formában várja. Elfogadjuk mindkét
+  // beírást: ha a KeyID már tartalmaz '/'-t, azt használjuk, különben elé tesszük az AppID-t.
+  const kid = opts.keyId.includes('/') ? opts.keyId : `${opts.appId}/${opts.keyId}`;
+  const header = { alg: 'RS256', kid, typ: 'JWT' };
   const payload = {
     aud: 'jitsi',
     iss: 'chat',
