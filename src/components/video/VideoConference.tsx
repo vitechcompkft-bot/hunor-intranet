@@ -412,7 +412,12 @@ function ActiveCall({ room, onLeave }: { room: Room; onLeave: () => void }) {
           roomName: `${data.appId}/${room.room_key}`,
           jwt: data.token,
           parentNode: containerRef.current,
-          configOverwrite: { prejoinPageEnabled: false },
+          // Előnézet ("Join meeting") kihagyása → egyből a hívásba lép.
+          // (Régi és új Jitsi-kulcs is, hogy verziótól függetlenül működjön.)
+          configOverwrite: {
+            prejoinPageEnabled: false,
+            prejoinConfig: { enabled: false },
+          },
         });
         apiRef.current.addEventListener('readyToClose', onLeave);
         setMode('jaas');

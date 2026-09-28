@@ -36,8 +36,9 @@ export async function POST(req: Request) {
   const isStaff = user.role === 'admin' || user.role === 'kozpont';
 
   // Bolt/trafik csak a neki kiosztott szobához kap tokent.
+  const scope = userScopeNumber(user);
+
   if (!isStaff) {
-    const scope = userScopeNumber(user);
     if (!scope) {
       return NextResponse.json({ error: 'Nincs bolt/trafik hozzárendelve' }, { status: 403 });
     }
@@ -59,13 +60,19 @@ export async function POST(req: Request) {
     }
   }
 
+  // A hívásban megjelenő név: staffnál a felhasználónév, boltnál/trafiknál a
+  // boltszám (amivel be van lépve) — pl. "Bolt 4300" / "Trafik T01".
+  const displayName = isStaff
+    ? user.username
+    : `${user.role === 'trafik' ? 'Trafik' : 'Bolt'} ${scope}`;
+
   let token: string;
   try {
     token = signJaasToken({
       appId,
       keyId,
       privateKey,
-      user: { id: user.id, name: user.username, email: user.email, moderator: isStaff },
+      user: { id: user.id, name: displayName, email: user.email, moderator: isStaff },
     });
   } catch (e) {
     // Leggyakrabban a JAAS_PRIVATE_KEY formátuma rossz (hiányzó sortörések,
