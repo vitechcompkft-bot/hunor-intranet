@@ -2,14 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, Pencil, Trash2, Paperclip, FileSpreadsheet, FileText, BarChart3, Loader2 } from 'lucide-react';
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Paperclip,
+  FileSpreadsheet,
+  FileText,
+  BarChart3,
+  Loader2,
+  MessageSquare,
+  Send,
+  RefreshCw,
+  Lock,
+} from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Modal } from '@/components/ui/Modal';
 import { BugReportForm } from './BugReportForm';
 import { getSignedUrl } from '@/lib/storage';
 import { exportTablePdf, exportTableExcel, type ExportColumn } from '@/lib/exports';
-import { userScopeNumber } from '@/lib/types';
-import type { AppUser, BugReport, BugStatus } from '@/lib/types';
+import { userScopeNumber, STORAGE_BUCKET } from '@/lib/types';
+import type { AppUser, BugReport, BugReportMessage, BugStatus } from '@/lib/types';
+
+/** A hibajegyhez író fél megjelenített neve. */
+function authorName(user: AppUser): string {
+  if (user.role === 'admin') return 'Adminisztrátor';
+  if (user.role === 'kozpont') return 'Központ';
+  const n = userScopeNumber(user) ?? '';
+  return (user.role === 'trafik' ? `Trafik ${n}` : `Bolt ${n}`).trim();
+}
+
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|heic)$/i;
 
 const STATUS_BADGE: Record<BugStatus, string> = {
   Folyamatban: 'bg-yellow-100 text-yellow-800',
@@ -25,6 +48,7 @@ export function BugReportList({ user }: { user: AppUser }) {
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [editing, setEditing] = useState<BugReport | null>(null);
+  const [thread, setThread] = useState<BugReport | null>(null);
 
   // szűrők (staff)
   const [fStatus, setFStatus] = useState<'' | BugStatus>('');
@@ -189,6 +213,13 @@ export function BugReportList({ user }: { user: AppUser }) {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => setThread(r)}
+                        className="rounded p-1.5 text-gray-400 hover:bg-brand-50 hover:text-brand-600"
+                        title={r.status === 'Lezárva' ? 'Üzenetek (lezárva)' : 'Üzenetek / kérdés'}
+                      >
+                        <MessageSquare size={15} />
+                      </button>
                       {r.attachment_path && (
                         <button
                           onClick={() => downloadAttachment(r.attachment_path!)}
@@ -246,7 +277,231 @@ export function BugReportList({ user }: { user: AppUser }) {
           }}
         />
       )}
+
+      {thread && (
+        <BugThreadModal report={thread} user={user} onClose={() => setThread(null)} />
+      )}
     </div>
+  );
+}
+
+function BugThreadModal({
+  report,
+  user,
+  onClose,
+}: {
+  report: BugReport;
+  user: AppUser;
+  onClose: () => void;
+}) {
+  const supabase = useMemo(() => createClient(), []);
+  const closed = report.status === 'Lezárva';
+
+  const [messages, setMessages] = useState<BugReportMessage[]>([]);
+  const [imgUrls, setImgUrls] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase
+      .from('bug_report_messages')
+      .select('*')
+      .eq('bug_report_id', report.id)
+      .order('created_at', { ascending: true });
+    const msgs = (data as BugReportMessage[]) ?? [];
+    setMessages(msgs);
+    setLoading(false);
+    // Kép-csatolmányokhoz aláírt URL (inline előnézethez)
+    const urls: Record<string, string> = {};
+    await Promise.all(
+      msgs
+        .filter((m) => m.attachment_path && IMAGE_RE.test(m.attachment_path))
+        .map(async (m) => {
+          try {
+            urls[m.id] = await getSignedUrl(supabase, m.attachment_path!, 300);
+          } catch {
+            /* noop */
+          }
+        })
+    );
+    setImgUrls(urls);
+  }, [supabase, report.id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Legjobb-szándékú realtime (VPN alatt nem mindig megy — ezért van Frissítés gomb is)
+  useEffect(() => {
+    const channel = supabase
+      .channel(`bug_msgs_${report.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'bug_report_messages',
+          filter: `bug_report_id=eq.${report.id}`,
+        },
+        () => load()
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, report.id, load]);
+
+  async function openAttachment(path: string) {
+    try {
+      const url = await getSignedUrl(supabase, path, 120);
+      window.open(url, '_blank');
+    } catch {
+      alert('A csatolmány nem érhető el.');
+    }
+  }
+
+  async function send() {
+    if (!text.trim() && !file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      let attachmentPath: string | null = null;
+      if (file) {
+        const safe = file.name.replace(/[^\w.\-]/g, '_');
+        const target = `bug-reports/${Date.now()}_${safe}`;
+        const { error: upErr } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .upload(target, file, { upsert: true, contentType: file.type || undefined });
+        if (upErr) throw upErr;
+        attachmentPath = target;
+      }
+      const { error: insErr } = await supabase.from('bug_report_messages').insert({
+        bug_report_id: report.id,
+        author_id: user.id,
+        author_name: authorName(user),
+        message: text.trim() || null,
+        attachment_path: attachmentPath,
+      });
+      if (insErr) throw insErr;
+      setText('');
+      setFile(null);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Küldési hiba');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Hibajegy #${report.report_number} — üzenetek`} maxWidth="max-w-2xl">
+      {/* Eredeti hibajegy */}
+      <div className="rounded-lg bg-gray-50 p-3 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-medium text-gray-800">{report.bug_name}</p>
+          <span className={`badge ${STATUS_BADGE[report.status]}`}>{report.status}</span>
+        </div>
+        <p className="mt-1 whitespace-pre-wrap text-gray-600">{report.bug_description}</p>
+        {report.attachment_path && (
+          <button
+            onClick={() => openAttachment(report.attachment_path!)}
+            className="mt-2 inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
+          >
+            <Paperclip size={13} /> Eredeti csatolmány
+          </button>
+        )}
+      </div>
+
+      {/* Üzenetek */}
+      <div className="mt-4 max-h-[42vh] space-y-3 overflow-y-auto pr-1">
+        {loading ? (
+          <div className="flex items-center justify-center py-8 text-gray-400">
+            <Loader2 className="animate-spin" />
+          </div>
+        ) : messages.length === 0 ? (
+          <p className="py-6 text-center text-sm text-gray-400">
+            Még nincs üzenet. Írj elsőként kérdést vagy kiegészítést.
+          </p>
+        ) : (
+          messages.map((m) => {
+            const mine = m.author_id === user.id;
+            return (
+              <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                    mine ? 'bg-brand-50 text-gray-800' : 'bg-gray-100 text-gray-800'
+                  }`}
+                >
+                  <div className="mb-0.5 flex items-center gap-2 text-xs text-gray-500">
+                    <span className="font-medium">{m.author_name ?? 'Ismeretlen'}</span>
+                    <span>{new Date(m.created_at).toLocaleString('hu-HU')}</span>
+                  </div>
+                  {m.message && <p className="whitespace-pre-wrap">{m.message}</p>}
+                  {m.attachment_path &&
+                    (imgUrls[m.id] ? (
+                      <button onClick={() => openAttachment(m.attachment_path!)} className="mt-1 block">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={imgUrls[m.id]}
+                          alt="csatolmány"
+                          className="max-h-48 rounded-md border border-gray-200"
+                        />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => openAttachment(m.attachment_path!)}
+                        className="mt-1 inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
+                      >
+                        <Paperclip size={13} /> Csatolmány megnyitása
+                      </button>
+                    ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+
+      {/* Új üzenet / kép — csak ha nincs lezárva */}
+      {closed ? (
+        <div className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-gray-50 py-3 text-sm text-gray-500">
+          <Lock size={14} /> A hibajegy lezárva — nem írható hozzá több üzenet.
+        </div>
+      ) : (
+        <div className="mt-4 space-y-2 border-t border-gray-100 pt-4">
+          <textarea
+            className="input min-h-[70px]"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Írj üzenetet, kérdést vagy választ…"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-500 hover:text-brand-600">
+              <Paperclip size={16} />
+              {file ? file.name : 'Kép / csatolmány'}
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <div className="flex items-center gap-2">
+              <button onClick={load} className="btn-secondary" title="Frissítés" disabled={busy}>
+                <RefreshCw size={16} />
+              </button>
+              <button onClick={send} className="btn-primary" disabled={busy || (!text.trim() && !file)}>
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Küldés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 

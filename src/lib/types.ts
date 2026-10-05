@@ -83,6 +83,17 @@ export interface BugReport {
   created_at: string;
 }
 
+/** Egy hibajegyhez tartozó üzenet (kérdés/válasz + opcionális csatolmány). */
+export interface BugReportMessage {
+  id: string;
+  bug_report_id: string;
+  author_id: string | null;
+  author_name: string | null;
+  message: string | null;
+  attachment_path: string | null;
+  created_at: string;
+}
+
 export interface Invoice {
   id: string;
   sender: string | null;
