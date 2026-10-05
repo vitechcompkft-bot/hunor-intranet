@@ -50,8 +50,9 @@ export function BugReportList({ user }: { user: AppUser }) {
   const [editing, setEditing] = useState<BugReport | null>(null);
   const [thread, setThread] = useState<BugReport | null>(null);
 
-  // szűrők (staff)
-  const [fStatus, setFStatus] = useState<'' | BugStatus>('');
+  // szűrők (staff). Adminnál alapból CSAK a folyamatban lévő jegyek látszanak
+  // (a Státusz szűrővel bármikor átállítható "Mind"-re vagy "Lezárva"-ra).
+  const [fStatus, setFStatus] = useState<'' | BugStatus>(isAdmin ? 'Folyamatban' : '');
   const [fStore, setFStore] = useState('');
   const [fFrom, setFFrom] = useState('');
   const [fTo, setFTo] = useState('');
