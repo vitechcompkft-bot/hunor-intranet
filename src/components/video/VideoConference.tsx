@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Video, LogIn, LogOut, Plus, Trash2, Loader2, Users, X } from 'lucide-react';
+import { Video, LogIn, LogOut, Plus, Trash2, Loader2, Users, X, Save } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { Modal } from '@/components/ui/Modal';
 import { userScopeNumber } from '@/lib/types';
 import type { AppUser } from '@/lib/types';
 
@@ -42,6 +43,7 @@ export function VideoConference({ user }: { user: AppUser }) {
   const [assignMap, setAssignMap] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<Room | null>(null);
+  const [editRoom, setEditRoom] = useState<Room | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,13 +141,170 @@ export function VideoConference({ user }: { user: AppUser }) {
                 <button onClick={() => setActive(r)} className="btn-primary flex-1">
                   <LogIn size={16} /> Csatlakozás
                 </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => setEditRoom(r)}
+                    className="btn-secondary"
+                    title="Résztvevők (boltok/trafikok) szerkesztése"
+                  >
+                    <Users size={16} />
+                  </button>
+                )}
                 {isAdmin && <DeleteRoom supabase={supabase} room={r} onDeleted={load} />}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {editRoom && (
+        <RoomParticipants
+          supabase={supabase}
+          room={editRoom}
+          onClose={() => setEditRoom(null)}
+          onSaved={() => {
+            setEditRoom(null);
+            load();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ============================================================================
+// Admin: meglévő szoba résztvevőinek (bolt/trafik) szerkesztése — hozzáadás/levétel
+// ============================================================================
+function RoomParticipants({
+  supabase,
+  room,
+  onClose,
+  onSaved,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  room: Room;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [opts, setOpts] = useState<StoreOpt[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [original, setOriginal] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const [{ data: list }, { data: assigns }] = await Promise.all([
+        supabase.from('store_lists').select('number,label,type').order('sort_order'),
+        supabase.from('video_room_assignments').select('store_number').eq('room_id', room.id),
+      ]);
+      setOpts((list as StoreOpt[]) ?? []);
+      const current = new Set((assigns ?? []).map((a: { store_number: string }) => a.store_number));
+      setSelected(new Set(current));
+      setOriginal(current);
+      setLoading(false);
+    })();
+  }, [supabase, room.id]);
+
+  const stores = opts.filter((o) => o.type === 'store');
+  const trafiks = opts.filter((o) => o.type === 'trafik');
+
+  function toggle(n: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(n) ? next.delete(n) : next.add(n);
+      return next;
+    });
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const toAdd = [...selected].filter((n) => !original.has(n));
+      const toRemove = [...original].filter((n) => !selected.has(n));
+
+      if (toAdd.length > 0) {
+        const { error: e1 } = await supabase
+          .from('video_room_assignments')
+          .insert(toAdd.map((store_number) => ({ room_id: room.id, store_number })));
+        if (e1) throw e1;
+      }
+      if (toRemove.length > 0) {
+        const { error: e2 } = await supabase
+          .from('video_room_assignments')
+          .delete()
+          .eq('room_id', room.id)
+          .in('store_number', toRemove);
+        if (e2) throw e2;
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Mentési hiba');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const checkboxGrid = (list: StoreOpt[]) => (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {list.map((s) => (
+        <label key={s.number} className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={selected.has(s.number)}
+            onChange={() => toggle(s.number)}
+            className="rounded text-brand-600 focus:ring-brand-500"
+          />
+          {s.number}
+        </label>
+      ))}
+    </div>
+  );
+
+  return (
+    <Modal open onClose={onClose} title={`Résztvevők — ${room.name}`} maxWidth="max-w-2xl">
+      {loading ? (
+        <div className="flex items-center justify-center py-10 text-gray-400">
+          <Loader2 className="animate-spin" />
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          <p className="flex items-center gap-2 text-sm font-medium text-gray-700">
+            <Users size={16} /> Kik láthatják? ({selected.size} kiválasztva)
+          </p>
+
+          {stores.length > 0 && (
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Boltok</p>
+              {checkboxGrid(stores)}
+            </div>
+          )}
+          {trafiks.length > 0 && (
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Trafikok</p>
+              {checkboxGrid(trafiks)}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
+            <button onClick={onClose} className="btn-secondary" disabled={busy}>
+              Mégse
+            </button>
+            <button onClick={save} className="btn-primary" disabled={busy}>
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Mentés
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
