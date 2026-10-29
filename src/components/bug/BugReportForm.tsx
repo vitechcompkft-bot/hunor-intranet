@@ -22,6 +22,60 @@ function roleWord(role: string): string {
   return 'admin';
 }
 
+/** Supabase/hálózati hiba → ember által olvasható üzenet + újrapróbálható-e. */
+function describeError(e: unknown): { msg: string; retriable: boolean } {
+  const raw =
+    (typeof e === 'object' && e !== null && 'message' in e
+      ? String((e as { message: unknown }).message)
+      : e instanceof Error
+        ? e.message
+        : String(e ?? '')) || '';
+  const low = raw.toLowerCase();
+  const networkish =
+    raw === '' ||
+    low.includes('failed to fetch') ||
+    low.includes('load failed') ||
+    low.includes('networkerror') ||
+    low.includes('network request') ||
+    low.includes('fetch') ||
+    low.includes('timeout') ||
+    low.includes('nem elérhető') ||
+    low.includes('502') ||
+    low.includes('503') ||
+    low.includes('504');
+  if (networkish) {
+    return {
+      msg: 'Hálózati/kapcsolati hiba — a mentés most nem jutott el a szerverhez. Ellenőrizd a VPN/internet kapcsolatot, és próbáld újra a Beküldést.',
+      retriable: true,
+    };
+  }
+  return { msg: raw ? `Mentési hiba: ${raw}` : 'Ismeretlen mentési hiba.', retriable: false };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Egy Supabase-műveletet futtat, és átmeneti (hálózati) hiba esetén
+ * újrapróbál — a bolti VPN/WAN pillanatnyi kimaradásai miatt. Nem átmeneti
+ * hibát (pl. jogosultság) azonnal továbbdob.
+ */
+async function runWithRetry(fn: () => Promise<{ error: unknown }>, tries = 3): Promise<void> {
+  let last: unknown = null;
+  for (let i = 0; i < tries; i++) {
+    let res: { error: unknown };
+    try {
+      res = await fn();
+    } catch (e) {
+      res = { error: e };
+    }
+    if (!res.error) return;
+    last = res.error;
+    if (!describeError(res.error).retriable) throw res.error;
+    if (i < tries - 1) await sleep(600 * (i + 1));
+  }
+  throw last;
+}
+
 export function BugReportForm({
   user,
   onSaved,
@@ -55,21 +109,25 @@ export function BugReportForm({
       if (file) {
         const safe = file.name.replace(/[^\w.\-]/g, '_');
         const target = `bug-reports/${Date.now()}_${safe}`;
-        const { error: upErr } = await supabase.storage
-          .from(STORAGE_BUCKET)
-          .upload(target, file, { upsert: true, contentType: file.type || undefined });
-        if (upErr) throw upErr;
+        await runWithRetry(async () => {
+          const { error } = await supabase.storage
+            .from(STORAGE_BUCKET)
+            .upload(target, file, { upsert: true, contentType: file.type || undefined });
+          return { error };
+        });
         attachmentPath = target;
       }
 
-      const { error: insErr } = await supabase.from('bug_reports').insert({
-        store_number: storeNumber || null,
-        bug_name: bugName,
-        bug_description: description.trim(),
-        attachment_path: attachmentPath,
-        reported_by: user.id,
-      } satisfies Partial<BugReport> & { reported_by: string });
-      if (insErr) throw insErr;
+      await runWithRetry(async () => {
+        const { error } = await supabase.from('bug_reports').insert({
+          store_number: storeNumber || null,
+          bug_name: bugName,
+          bug_description: description.trim(),
+          attachment_path: attachmentPath,
+          reported_by: user.id,
+        } satisfies Partial<BugReport> & { reported_by: string });
+        return { error };
+      });
 
       // Beküldő (szerep + bolt/trafik szám) és időpont összeállítása
       const numLabel = user.role === 'trafik' ? 'Trafik' : 'Bolt';
@@ -96,7 +154,7 @@ export function BugReportForm({
 
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Mentési hiba');
+      setError(describeError(err).msg);
     } finally {
       setBusy(false);
     }
