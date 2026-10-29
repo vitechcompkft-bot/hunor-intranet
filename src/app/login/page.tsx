@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, LogIn, Loader2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { SCOPE_COOKIE } from '@/lib/scope';
+import { SCOPE_COOKIE, ACTIVITY_KEY } from '@/lib/scope';
 import { Logo } from '@/components/Logo';
 
 interface StoreOption {
@@ -112,6 +112,14 @@ function LoginForm() {
         }
       }
 
+      // Friss aktivitás-időbélyeg, hogy a tétlenségi kiléptető ne egy korábbi
+      // munkamenet elavult értékével léptessen ki rögtön belépés után.
+      try {
+        localStorage.setItem(ACTIVITY_KEY, String(Date.now()));
+      } catch {
+        /* noop */
+      }
+
       await logAttempt(true);
       const redirect = params.get('redirect') || '/';
       router.replace(redirect);
@@ -138,6 +146,12 @@ function LoginForm() {
               <span className="text-xl font-bold tracking-wide text-gray-800">INTRANET</span>
             </div>
           </div>
+
+          {!error && params.get('timeout') === '1' && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Biztonsági okból (tétlenség miatt) kiléptettünk. Kérlek jelentkezz be újra.
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
