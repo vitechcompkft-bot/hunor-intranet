@@ -31,6 +31,21 @@ function describeError(e: unknown): { msg: string; retriable: boolean } {
         ? e.message
         : String(e ?? '')) || '';
   const low = raw.toLowerCase();
+  // Lejárt / érvénytelen munkamenet (pl. egész éjszakára nyitva hagyott felület)
+  const authExpired =
+    low.includes('jwt') ||
+    low.includes('expired') ||
+    low.includes('unauthorized') ||
+    low.includes('not authenticated') ||
+    low.includes('refresh token') ||
+    low.includes('invalid token') ||
+    low.includes('401');
+  if (authExpired) {
+    return {
+      msg: 'A munkamenet lejárt (valószínűleg régóta nyitva volt a felület). Lépj ki (Kilépés jobbra fent), majd jelentkezz be újra, és küldd be a hibajegyet ismét.',
+      retriable: false,
+    };
+  }
   const networkish =
     raw === '' ||
     low.includes('failed to fetch') ||
