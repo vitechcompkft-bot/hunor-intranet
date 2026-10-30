@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, LogIn, Loader2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { SCOPE_COOKIE, ACTIVITY_KEY } from '@/lib/scope';
+import { BUILD_ID } from '@/lib/version';
 import { Logo } from '@/components/Logo';
 
 interface StoreOption {
@@ -241,7 +242,7 @@ function LoginForm() {
         </div>
 
         <p className="mt-6 text-center text-xs text-gray-400">
-          Hunor Coop szövetkezet · belső rendszer
+          Hunor Coop szövetkezet · belső rendszer · v{BUILD_ID}
         </p>
       </div>
     </div>

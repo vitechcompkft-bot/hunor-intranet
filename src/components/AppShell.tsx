@@ -10,6 +10,7 @@ import { Logo } from '@/components/Logo';
 import { NAV_ITEMS, type NavKey } from '@/lib/nav';
 import { ChatbotWidget } from '@/components/chat/ChatbotWidget';
 import { IdleLogout } from '@/components/IdleLogout';
+import { VersionWatcher } from '@/components/VersionWatcher';
 import { ROLE_LABELS, ROLE_BADGE } from '@/lib/auth';
 import type { AppUser } from '@/lib/types';
 
@@ -186,6 +187,7 @@ export function AppShell({
         <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">{children}</main>
         {allowedSet.has('chat') && <ChatbotWidget />}
         <IdleLogout />
+        <VersionWatcher />
       </div>
     );
   }
@@ -252,6 +254,7 @@ export function AppShell({
 
       {allowedSet.has('chat') && <ChatbotWidget />}
       <IdleLogout />
+      <VersionWatcher />
     </div>
   );
 }
