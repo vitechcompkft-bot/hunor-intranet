@@ -11,6 +11,7 @@ import { NAV_ITEMS, type NavKey } from '@/lib/nav';
 import { ChatbotWidget } from '@/components/chat/ChatbotWidget';
 import { IdleLogout } from '@/components/IdleLogout';
 import { VersionWatcher } from '@/components/VersionWatcher';
+import { PendingBugReports } from '@/components/PendingBugReports';
 import { ROLE_LABELS, ROLE_BADGE } from '@/lib/auth';
 import type { AppUser } from '@/lib/types';
 
@@ -188,6 +189,7 @@ export function AppShell({
         {allowedSet.has('chat') && <ChatbotWidget />}
         <IdleLogout />
         <VersionWatcher />
+        <PendingBugReports />
       </div>
     );
   }
@@ -255,6 +257,7 @@ export function AppShell({
       {allowedSet.has('chat') && <ChatbotWidget />}
       <IdleLogout />
       <VersionWatcher />
+      <PendingBugReports />
     </div>
   );
 }

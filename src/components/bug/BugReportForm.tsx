@@ -5,6 +5,14 @@ import { Loader2, Paperclip } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { STORAGE_BUCKET, BUG_NAMES, userScopeNumber } from '@/lib/types';
 import type { AppUser, BugReport } from '@/lib/types';
+import {
+  enqueuePendingBug,
+  makeId,
+  isAuthError,
+  isNetworkError,
+  errMessage,
+  type PendingBugNotification,
+} from '@/lib/pendingBugReports';
 
 const PRIORITIES = [
   { key: 'kritikus', label: 'Kritikus' },
@@ -22,48 +30,22 @@ function roleWord(role: string): string {
   return 'admin';
 }
 
-/** Supabase/hálózati hiba → ember által olvasható üzenet + újrapróbálható-e. */
+/** Supabase/hálózati hiba → ember által olvasható üzenet + újrapróbálható-e.
+ *  A besorolás a lib/pendingBugReports közös helpereivel egyezik. */
 function describeError(e: unknown): { msg: string; retriable: boolean } {
-  const raw =
-    (typeof e === 'object' && e !== null && 'message' in e
-      ? String((e as { message: unknown }).message)
-      : e instanceof Error
-        ? e.message
-        : String(e ?? '')) || '';
-  const low = raw.toLowerCase();
-  // Lejárt / érvénytelen munkamenet (pl. egész éjszakára nyitva hagyott felület)
-  const authExpired =
-    low.includes('jwt') ||
-    low.includes('expired') ||
-    low.includes('unauthorized') ||
-    low.includes('not authenticated') ||
-    low.includes('refresh token') ||
-    low.includes('invalid token') ||
-    low.includes('401');
-  if (authExpired) {
+  if (isAuthError(e)) {
     return {
       msg: 'A munkamenet lejárt (valószínűleg régóta nyitva volt a felület). Lépj ki (Kilépés jobbra fent), majd jelentkezz be újra, és küldd be a hibajegyet ismét.',
       retriable: false,
     };
   }
-  const networkish =
-    raw === '' ||
-    low.includes('failed to fetch') ||
-    low.includes('load failed') ||
-    low.includes('networkerror') ||
-    low.includes('network request') ||
-    low.includes('fetch') ||
-    low.includes('timeout') ||
-    low.includes('nem elérhető') ||
-    low.includes('502') ||
-    low.includes('503') ||
-    low.includes('504');
-  if (networkish) {
+  if (isNetworkError(e)) {
     return {
       msg: 'Hálózati/kapcsolati hiba — a mentés most nem jutott el a szerverhez. Ellenőrizd a VPN/internet kapcsolatot, és próbáld újra a Beküldést.',
       retriable: true,
     };
   }
+  const raw = errMessage(e);
   return { msg: raw ? `Mentési hiba: ${raw}` : 'Ismeretlen mentési hiba.', retriable: false };
 }
 
@@ -119,6 +101,25 @@ export function BugReportForm({
     }
     setBusy(true);
     setError(null);
+
+    // Beküldő (szerep + bolt/trafik szám) és időpont — a Telegram-értesítéshez.
+    // Előre összeállítjuk, hogy hiba esetén a háttér-sorba is bekerülhessen.
+    const numLabel = user.role === 'trafik' ? 'Trafik' : 'Bolt';
+    const num = storeNumber.trim();
+    const bekuldo = num ? `${roleWord(user.role)} (${numLabel}: ${num})` : roleWord(user.role);
+    const d = new Date();
+    const idopont = `${d.getFullYear()}. ${pad(d.getMonth() + 1)}. ${pad(d.getDate())}. ${pad(
+      d.getHours()
+    )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const notification: PendingBugNotification = {
+      cim: bugName,
+      prioritas: priority,
+      bekuldo,
+      idopont,
+      melleklet: file ? 'Igen' : 'Nem',
+      leiras: description.trim(),
+    };
+
     try {
       let attachmentPath: string | null = null;
       if (file) {
@@ -144,32 +145,42 @@ export function BugReportForm({
         return { error };
       });
 
-      // Beküldő (szerep + bolt/trafik szám) és időpont összeállítása
-      const numLabel = user.role === 'trafik' ? 'Trafik' : 'Bolt';
-      const num = storeNumber.trim();
-      const bekuldo = num ? `${roleWord(user.role)} (${numLabel}: ${num})` : roleWord(user.role);
-      const d = new Date();
-      const idopont = `${d.getFullYear()}. ${pad(d.getMonth() + 1)}. ${pad(d.getDate())}. ${pad(
-        d.getHours()
-      )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-
       // Telegram értesítés (best effort — hiba nem blokkol)
       fetch('/api/telegram/notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cim: bugName,
-          prioritas: priority,
-          bekuldo,
-          idopont,
-          melleklet: file ? 'Igen' : 'Nem',
-          leiras: description.trim(),
-        }),
+        body: JSON.stringify(notification),
       }).catch(() => {});
 
       onSaved();
     } catch (err) {
-      setError(describeError(err).msg);
+      const info = describeError(err);
+      // Átmeneti hálózati hiba ÉS nincs csatolmány → a háttér-sorba tesszük, hogy
+      // a bolt ne vesszen el / ne kelljen újragépelnie; a háttér-küldő elintézi.
+      if (info.retriable && !file) {
+        enqueuePendingBug({
+          id: makeId(),
+          payload: {
+            store_number: storeNumber || null,
+            bug_name: bugName,
+            bug_description: description.trim(),
+            attachment_path: null,
+            reported_by: user.id,
+          },
+          notification,
+          createdAt: new Date().toISOString(),
+          tries: 0,
+        });
+        window.dispatchEvent(new CustomEvent('hunor:bug-queued'));
+        onSaved(); // bezárjuk a modált; a háttér-küldő átveszi
+      } else if (info.retriable && file) {
+        setError(
+          info.msg +
+            ' A csatolmány miatt most nem tudom automatikusan háttérben elküldeni — próbáld újra.'
+        );
+      } else {
+        setError(info.msg);
+      }
     } finally {
       setBusy(false);
     }

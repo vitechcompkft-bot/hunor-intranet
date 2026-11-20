@@ -78,6 +78,13 @@ export function BugReportList({ user }: { user: AppUser }) {
     load();
   }, [load]);
 
+  // Ha egy háttérben elakadt hibajegy végül elment, frissítjük a listát.
+  useEffect(() => {
+    const onSaved = () => load();
+    window.addEventListener('hunor:bug-saved', onSaved);
+    return () => window.removeEventListener('hunor:bug-saved', onSaved);
+  }, [load]);
+
   const filtered = useMemo(() => {
     return reports.filter((r) => {
       if (fStatus && r.status !== fStatus) return false;
